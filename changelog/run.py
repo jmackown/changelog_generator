@@ -861,15 +861,14 @@ Examples:
 
     args = parser.parse_args()
 
-    # Determine if we should actually write
-    should_write = args.write and not args.dry_run
+    # Determine if we should actually write - --write flag overrides default dry_run
     if args.write:
         print("WRITE MODE: Files will be modified!")
     else:
         print("DRY RUN MODE: No files will be modified (safe)")
 
     generator = ChangelogGenerator(
-        dry_run=not should_write,
+        dry_run=not args.write,  # If --write is passed, dry_run is False
         with_summaries=args.with_summaries,
         model=args.model,
         use_openai=args.use_openai,
