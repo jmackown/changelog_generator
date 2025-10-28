@@ -132,7 +132,7 @@ class ChangelogGenerator:
             "--first-parent",
             "main",  # Only commits directly on main
             f"--since={since_date}",
-            "--grep=(#",  # Only PR merge commits
+            "--grep=#",  # PR merge commits (both squash and regular merges)
         ]
         output = self.run_git_command(cmd)
         return output.split("\n") if output else []
@@ -159,7 +159,7 @@ class ChangelogGenerator:
             "--first-parent",
             "main",  # Only commits directly on main
             f"-n{count}",
-            "--grep=(#",  # Only PR merge commits
+            "--grep=#",  # PR merge commits (both squash and regular merges)
         ]
         output = self.run_git_command(cmd)
         return output.split("\n") if output else []
@@ -511,11 +511,11 @@ Please respond with only bullet points, starting each with "•". Keep each poin
         date_str = lines[2]
 
         # Skip non-PR commits or commits we don't want
-        if "(#" not in subject:
+        if "#" not in subject:
             return None
 
-        # Parse PR number
-        pr_match = re.search(r"\(#(\d+)\)", subject)
+        # Parse PR number - supports both squash merge "(#123)" and regular merge "#123"
+        pr_match = re.search(r"#(\d+)", subject)
         pr_number = pr_match.group(1) if pr_match else None
 
         # Parse JIRA ticket (matches common pattern: PROJECT-123)
@@ -523,8 +523,16 @@ Please respond with only bullet points, starting each with "•". Keep each poin
         jira_match = re.search(r"([A-Z]+-\d+)", subject)
         jira_ticket = jira_match.group(1) if jira_match else None
 
-        # Clean up title (remove PR number)
-        title = re.sub(r"\s*\(#\d+\)\s*$", "", subject).strip()
+        # Clean up title (remove PR number for both squash and merge commits)
+        # Remove "(#123)" at end for squash merges
+        title = re.sub(r"\s*\(#\d+\)\s*$", "", subject)
+        # For regular merge commits, extract branch name from "Merge pull request #123 from user/branch"
+        merge_match = re.match(r"^Merge pull request #\d+ from \S+/(.+)$", subject)
+        if merge_match:
+            branch_name = merge_match.group(1)
+            # Convert branch name to readable title (replace _ and - with spaces, capitalize)
+            title = branch_name.replace("_", " ").replace("-", " ").title()
+        title = title.strip()
 
         # Parse date
         try:
