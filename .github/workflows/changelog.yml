@@ -87,6 +87,10 @@ jobs:
             ${{ inputs.use-openai && '--use-openai' || '' }} \
             --model ${{ inputs.model || 'claude-3-5-haiku-20241022' }}
 
+      - name: Cleanup temporary files
+        run: |
+          rm -rf .changelog_generator
+
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v6
         with:
