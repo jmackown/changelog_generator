@@ -136,6 +136,22 @@ jobs:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
+**Direct commits (no PR):**
+
+Use this for personal projects or repos without branch protection. Changelog updates commit directly to main with `[skip ci]` to prevent infinite loops.
+
+```yaml
+jobs:
+  changelog:
+    uses: jmackown/changelog_generator/.github/workflows/changelog.yml@main
+    with:
+      use-pull-request: false  # Commit directly to main (simpler, no manual merges)
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+**Note:** Default is `use-pull-request: true` (creates PRs) which is required for repos with branch protection rules.
+
 **All available options:**
 ```yaml
 jobs:
@@ -146,6 +162,7 @@ jobs:
       with-summaries: true             # AI summaries (default: true)
       model: 'claude-3-5-haiku-20241022'  # LLM model
       use-openai: false                # Use OpenAI instead (default: false)
+      use-pull-request: true           # Create PR (default: true, set false for direct commit)
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}  # Only if use-openai: true
