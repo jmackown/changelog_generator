@@ -1,0 +1,145 @@
+# Example: Basic Usage
+# Copy this file to your repository as: .github/workflows/changelog.yml
+#
+# This is the minimal configuration - just calls the reusable workflow
+# with default settings.
+
+name: Generate Changelog
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:  # Allow manual trigger for testing
+
+jobs:
+  changelog:
+    # Call the reusable workflow from changelog_generator
+    uses: jmackown/changelog_generator/.github/workflows/changelog.yml@main
+    secrets:
+      # Pass your Anthropic API key for AI summaries
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+---
+
+# Example: Disable AI Summaries
+# Use this if you don't want AI-generated summaries (faster, free)
+
+name: Generate Changelog
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  changelog:
+    uses: jmackown/changelog_generator/.github/workflows/changelog.yml@main
+    with:
+      with-summaries: false  # Disable AI summaries
+    # No ANTHROPIC_API_KEY needed when summaries are disabled
+
+---
+
+# Example: Use OpenAI Instead of Anthropic
+
+name: Generate Changelog
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  changelog:
+    uses: jmackown/changelog_generator/.github/workflows/changelog.yml@main
+    with:
+      use-openai: true
+      model: 'gpt-4o-mini'  # Cheaper than GPT-4
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+---
+
+# Example: Full Customization
+# All available options with custom values
+
+name: Generate Changelog
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  changelog:
+    uses: jmackown/changelog_generator/.github/workflows/changelog.yml@main
+    with:
+      # Python version to use
+      python-version: '3.12'
+
+      # Enable AI summaries
+      with-summaries: true
+
+      # Use Claude Sonnet (better quality, more expensive)
+      model: 'claude-3-5-sonnet-20241022'
+
+      # Or use OpenAI
+      # use-openai: true
+      # model: 'gpt-4o'
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      # OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}  # If using OpenAI
+
+---
+
+# Example: Pin to Specific Version (Recommended for Production)
+# Use a git tag instead of @main for stability
+
+name: Generate Changelog
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  changelog:
+    # Pin to v1.0.0 tag - won't auto-update
+    uses: jmackown/changelog_generator/.github/workflows/changelog.yml@v1.0.0
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+---
+
+# Example: Only Run on Release
+# Generate changelog only when creating a release, not on every PR merge
+
+name: Generate Changelog
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  changelog:
+    uses: jmackown/changelog_generator/.github/workflows/changelog.yml@main
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+---
+
+# Example: Manual Trigger Only
+# Only generate changelog when manually triggered (not automatic)
+
+name: Generate Changelog
+
+on:
+  workflow_dispatch:  # Manual trigger only
+
+jobs:
+  changelog:
+    uses: jmackown/changelog_generator/.github/workflows/changelog.yml@main
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
