@@ -573,16 +573,34 @@ Please respond with only bullet points, starting each with "•". Keep each poin
         )
 
     def generate_changelog_content(self, entries: List[ChangeEntry]) -> str:
-        """Generate the changelog markdown content."""
+        """Generate the changelog markdown content, merging with existing file."""
         if not entries:
             return "# Changelog\n\nNo changes found for the specified criteria.\n"
 
         # Sort entries by date (newest first)
         sorted_entries = sorted(entries, key=lambda x: x.date, reverse=True)
 
-        # Build simple markdown
-        content = ["# Changelog\n"]
-        content.append("## [Unreleased]\n")
+        # Read existing CHANGELOG.md if it exists
+        changelog_path = self.repo_root / "CHANGELOG.md"
+        existing_content = ""
+        existing_entries_section = ""
+
+        if changelog_path.exists():
+            with open(changelog_path, "r") as f:
+                existing_content = f.read()
+
+            # Extract existing entries from [Unreleased] section
+            # Find everything after "## [Unreleased]" and before the next "##" or "---"
+            unreleased_match = re.search(
+                r"## \[Unreleased\]\s*\n(.*?)(?=\n##|\n---|$)",
+                existing_content,
+                re.DOTALL
+            )
+            if unreleased_match:
+                existing_entries_section = unreleased_match.group(1).strip()
+
+        # Build new entries markdown
+        new_entries_content = []
 
         for entry in sorted_entries:
             # Beautiful card-style blockquote format
@@ -597,7 +615,7 @@ Please respond with only bullet points, starting each with "•". Keep each poin
                 title_with_link += f" (#{entry.pr_number})"
 
             # Start the blockquote card
-            content.append(f"> ### 📅 {date_str} | {title_with_link}")
+            new_entries_content.append(f"> ### 📅 {date_str} | {title_with_link}")
 
             # Add author, approver, ticket, and workflow run info
             details = []
@@ -615,13 +633,13 @@ Please respond with only bullet points, starting each with "•". Keep each poin
                 details.append(f"**Run:** #{entry.workflow_run_number}")
 
             if details:
-                content.append(f"> {' | '.join(details)}  ")
+                new_entries_content.append(f"> {' | '.join(details)}  ")
 
             # Add empty line before summary bullets
             if entry.summary:
-                content.append(">")
+                new_entries_content.append(">")
                 for bullet in entry.summary:
-                    content.append(f"> • {bullet}  ")
+                    new_entries_content.append(f"> • {bullet}  ")
 
             # Add commit hash at the end
             commit_link = (
@@ -630,20 +648,48 @@ Please respond with only bullet points, starting each with "•". Keep each poin
                 else None
             )
             if commit_link:
-                content.append(f"> [{entry.short_hash}]({commit_link})")
+                new_entries_content.append(f"> [{entry.short_hash}]({commit_link})")
             else:
-                content.append(f"> [{entry.short_hash}]")
+                new_entries_content.append(f"> [{entry.short_hash}]")
 
-            content.append("")  # Empty line between cards
+            new_entries_content.append("")  # Empty line between cards
 
-        content.append("")  # Empty line
+        # Build final content
+        if existing_content:
+            # Replace the [Unreleased] section with merged entries
+            new_entries_text = "\n".join(new_entries_content)
 
-        # Add generation info
-        content.append("---")
-        content.append(f"*Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*")
-        content.append("")
+            # Combine new entries with existing entries
+            combined_entries = new_entries_text
+            if existing_entries_section:
+                combined_entries = new_entries_text + "\n" + existing_entries_section
 
-        return "\n".join(content)
+            # Replace the [Unreleased] section
+            final_content = re.sub(
+                r"(## \[Unreleased\]\s*\n)(.*?)(?=\n##|\n---|$)",
+                r"\1" + combined_entries + "\n\n",
+                existing_content,
+                flags=re.DOTALL
+            )
+
+            # Update the generation timestamp at the bottom
+            final_content = re.sub(
+                r"\*Generated on .*?\*",
+                f"*Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*",
+                final_content
+            )
+
+            return final_content
+        else:
+            # No existing file, create from scratch
+            content = ["# Changelog\n"]
+            content.append("## [Unreleased]\n")
+            content.extend(new_entries_content)
+            content.append("")
+            content.append("---")
+            content.append(f"*Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*")
+            content.append("")
+            return "\n".join(content)
 
     def write_changelog(self, content: str) -> None:
         """Write the changelog to file."""
