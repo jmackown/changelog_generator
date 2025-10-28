@@ -1,9 +1,11 @@
 name: Generate Changelog
 
 on:
-  push:
-    branches:
-      - main
+  # Note: push trigger is intentionally disabled for the changelog_generator repo itself
+  # This workflow is designed to be called FROM other repositories via workflow_call
+  # push:
+  #   branches:
+  #     - main
   workflow_dispatch:  # Allow manual triggers for testing
   workflow_call:  # Allow other repos to call this workflow
     inputs:
