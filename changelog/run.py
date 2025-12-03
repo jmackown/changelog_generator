@@ -1,27 +1,88 @@
 #!/usr/bin/env python3
 """
-Changelog Generator
-
-Generates a changelog from PRs merged to main branch only.
-Safe to run with multiple dry-run and testing modes.
-
-Usage:
-    python changelog/run.py --dry-run
-    python changelog/run.py --from-date 2025-08-01
-    python changelog/run.py --between commit1 commit2
-    python changelog/run.py --since-last-commit --write
+Changelog Generator - generates changelog from PRs merged to main branch.
+Run with --dry-run to preview, or without flags to write CHANGELOG.md.
 """
 
 import argparse
 import subprocess
 import re
-import sys
 import json
 import os
 import requests
 from datetime import datetime
-from typing import List, Dict, Optional, NamedTuple
+from typing import List, Optional, NamedTuple
 from pathlib import Path
+
+
+# Provider registry - auto-detects based on available API keys
+PROVIDERS = {
+    "anthropic": {
+        "env_var": "ANTHROPIC_API_KEY",
+        "endpoint": "https://api.anthropic.com/v1/messages",
+        "model": "claude-3-5-haiku-20241022",
+    },
+    "openai": {
+        "env_var": "OPENAI_API_KEY",
+        "endpoint": "https://api.openai.com/v1/chat/completions",
+        "model": "gpt-4o-mini",
+    },
+    "gemini": {
+        "env_var": "GEMINI_API_KEY",
+        "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        "model": "gemini-2.0-flash-lite",
+    },
+}
+
+
+def detect_provider() -> Optional[str]:
+    """Return the first provider with an API key set, or None."""
+    for name, config in PROVIDERS.items():
+        if os.environ.get(config["env_var"]):
+            return name
+    return None
+
+
+def build_llm_request(provider: str, model: str, prompt: str) -> tuple[str, dict, dict]:
+    """Build endpoint, headers, and body for a provider."""
+    config = PROVIDERS[provider]
+    api_key = os.environ.get(config["env_var"])
+    endpoint = config["endpoint"]
+
+    if provider == "anthropic":
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+        body = {
+            "model": model,
+            "max_tokens": 200,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+    else:
+        # OpenAI-compatible format (OpenAI, Gemini)
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        body = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 200,
+            "temperature": 0.3,
+        }
+
+    return endpoint, headers, body
+
+
+def parse_llm_response(provider: str, response_json: dict) -> str:
+    """Extract text from provider response."""
+    if provider == "anthropic":
+        return response_json.get("content", [{}])[0].get("text", "")
+    else:
+        # OpenAI-compatible format
+        return response_json.get("choices", [{}])[0].get("message", {}).get("content", "")
 
 
 class ChangeEntry(NamedTuple):
@@ -35,7 +96,6 @@ class ChangeEntry(NamedTuple):
     date: datetime
     author: Optional[str]
     approver: Optional[str]
-    workflow_run_id: Optional[str]
     workflow_run_number: Optional[str]
     workflow_run_url: Optional[str]
     summary: Optional[List[str]]
@@ -48,13 +108,22 @@ class ChangelogGenerator:
         self,
         dry_run: bool = True,
         with_summaries: bool = False,
-        model: str = "gpt-4o-mini",
-        use_openai: bool = False,
+        model: Optional[str] = None,
+        provider: Optional[str] = None,
     ):
         self.dry_run = dry_run
         self.with_summaries = with_summaries
-        self.model = model
-        self.use_openai = use_openai
+
+        # Auto-detect provider if not specified
+        self.provider = provider or detect_provider()
+        # Use provider's default model if not specified
+        if model:
+            self.model = model
+        elif self.provider:
+            self.model = PROVIDERS[self.provider]["model"]
+        else:
+            self.model = None
+
         self.repo_root = Path.cwd()
         self.cache_file = self.repo_root / ".changelog-summaries.json"
         self._summary_cache = self._load_cache()
@@ -228,31 +297,23 @@ class ChangelogGenerator:
                 print(f"Warning: Could not get PR details for {commit_hash[:7]}: {e}")
             return None, None
 
-    def get_workflow_run(
-        self, commit_hash: str
-    ) -> tuple[Optional[str], Optional[str], Optional[str]]:
-        """Get GitHub Actions workflow run database ID, number, and URL for commit."""
+    def get_workflow_run(self, commit_hash: str) -> tuple[Optional[str], Optional[str]]:
+        """Get GitHub Actions workflow run number and URL for commit."""
         try:
-            # Get all workflow runs and find matching commit
-            cmd = ["gh", "run", "list", "--json", "headSha,databaseId,number,url,event"]
+            cmd = ["gh", "run", "list", "--json", "headSha,number,url,event"]
             result = subprocess.run(cmd, capture_output=True, text=True, check=True)
             runs = json.loads(result.stdout)
 
-            # Find push event run for this commit (merge to main)
             for run in runs:
                 if run.get("headSha") == commit_hash and run.get("event") == "push":
-                    return (
-                        str(run.get("databaseId")),
-                        str(run.get("number")),
-                        run.get("url"),
-                    )
+                    return str(run.get("number")), run.get("url")
 
-            return None, None, None
+            return None, None
 
         except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError) as e:
             if not self.dry_run:
                 print(f"Warning: Could not get workflow run for {commit_hash[:7]}: {e}")
-            return None, None, None
+            return None, None
 
     def get_pr_body(self, pr_number: str) -> Optional[str]:
         """Get PR description/body using GitHub CLI."""
@@ -289,7 +350,7 @@ class ChangelogGenerator:
     def get_llm_summary(
         self, commit_hash: str, pr_number: str, title: str
     ) -> Optional[List[str]]:
-        """Generate LLM summary bullets for a PR (optional, requires API key)."""
+        """Generate LLM summary bullets for a PR using auto-detected provider."""
         if not self.with_summaries:
             return None
 
@@ -297,10 +358,9 @@ class ChangelogGenerator:
         if commit_hash in self._summary_cache:
             return self._summary_cache[commit_hash]
 
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if not api_key:
+        if not self.provider:
             if not self.dry_run:
-                print("  Warning: ANTHROPIC_API_KEY not set, skipping LLM summaries")
+                print("  Warning: No LLM API key found, skipping summaries")
             return None
 
         # Get PR context
@@ -312,162 +372,33 @@ class ChangelogGenerator:
 
         # Construct context for LLM
         context_parts = [f"PR Title: {title}"]
-
-        if pr_body and len(pr_body) > 0:
-            context_parts.append(f"PR Description:\n{pr_body[:1000]}")  # Limit size
-
-        if file_stats:
-            context_parts.append(f"Files Changed:\n{file_stats}")
-
-        context = "\n\n".join(context_parts)
-
-        # Create prompt for summary
-        prompt = f"""Please analyze this pull request and provide 2-4 concise bullet points summarizing what was changed and why. Focus on the functional changes and their purpose, not technical implementation details.
-
-{context}
-
-Please respond with only bullet points, starting each with "•". Keep each point under 15 words."""
-
-        try:
-            # Minimal Claude API call
-            headers = {
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            }
-
-            data = {
-                "model": self.model,
-                "max_tokens": 200,
-                "messages": [{"role": "user", "content": prompt}],
-            }
-
-            if not self.dry_run:
-                print(f"  Generating LLM summary for {commit_hash[:7]}...")
-
-            response = requests.post(
-                "https://api.anthropic.com/v1/messages",
-                headers=headers,
-                json=data,
-                timeout=30,
-            )
-
-            if response.status_code == 200:
-                result = response.json()
-                summary_text = result.get("content", [{}])[0].get("text", "")
-
-                # Parse bullet points
-                bullets = []
-                for line in summary_text.split("\n"):
-                    line = line.strip()
-                    if (
-                        line.startswith("•")
-                        or line.startswith("-")
-                        or line.startswith("*")
-                    ):
-                        bullets.append(line[1:].strip())
-                    elif (
-                        line and not bullets
-                    ):  # First non-empty line if no bullets found
-                        bullets.append(line)
-
-                # Cache the result
-                summary = bullets[:4] if bullets else None
-                self._summary_cache[commit_hash] = summary
-                self._save_cache()
-
-                return summary
-
-            else:
-                if not self.dry_run:
-                    print(
-                        f"  Warning: LLM API error {response.status_code}: {response.text[:100]}"
-                    )
-                return None
-
-        except Exception as e:
-            if not self.dry_run:
-                print(
-                    f"  Warning: Could not generate LLM summary for {commit_hash[:7]}: {e}"
-                )
-            return None
-
-    def get_llm_summary_openai(
-        self, commit_hash: str, pr_number: str, title: str
-    ) -> Optional[List[str]]:
-        """Generate LLM summary using OpenAI API."""
-        if not self.with_summaries or not self.use_openai:
-            return None
-
-        api_key = os.environ.get("OPENAI_API_KEY")
-        if not api_key:
-            if not self.dry_run:
-                print("  Warning: OPENAI_API_KEY not set, skipping LLM summaries")
-            return None
-
-        # Get PR context
-        pr_body = self.get_pr_body(pr_number) if pr_number else None
-        file_stats = self.get_file_stats(commit_hash)
-
-        if not pr_body and not file_stats:
-            return None
-
-        # Construct context for LLM
-        context_parts = [f"PR Title: {title}"]
-
         if pr_body and len(pr_body) > 0:
             context_parts.append(f"PR Description:\n{pr_body[:1000]}")
-
         if file_stats:
             context_parts.append(f"Files Changed:\n{file_stats}")
-
         context = "\n\n".join(context_parts)
 
         prompt = f"""Please analyze this pull request and provide 2-4 concise bullet points summarizing what was changed and why. Focus on the functional changes and their purpose, not technical implementation details.
 
 {context}
 
-Please respond with only bullet points, starting each with "•". Keep each point under 15 words."""
+Please respond with only bullet points, starting each with "•". Keep each point under 25 words."""
 
         try:
             if not self.dry_run:
-                print(f"  Generating OpenAI summary for {commit_hash[:7]}...")
+                print(f"  Generating {self.provider} summary for {commit_hash[:7]}...")
 
-            # Simple OpenAI API call
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            }
-
-            data = {
-                "model": self.model,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 200,
-                "temperature": 0.3,
-            }
-
-            response = requests.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers=headers,
-                json=data,
-                timeout=30,
-            )
+            endpoint, headers, body = build_llm_request(self.provider, self.model, prompt)
+            response = requests.post(endpoint, headers=headers, json=body, timeout=30)
 
             if response.status_code == 200:
-                result = response.json()
-                summary_text = (
-                    result.get("choices", [{}])[0].get("message", {}).get("content", "")
-                )
+                summary_text = parse_llm_response(self.provider, response.json())
 
                 # Parse bullet points
                 bullets = []
                 for line in summary_text.split("\n"):
                     line = line.strip()
-                    if (
-                        line.startswith("•")
-                        or line.startswith("-")
-                        or line.startswith("*")
-                    ):
+                    if line.startswith("•") or line.startswith("-") or line.startswith("*"):
                         bullets.append(line[1:].strip())
                     elif line and not bullets:
                         bullets.append(line)
@@ -476,21 +407,16 @@ Please respond with only bullet points, starting each with "•". Keep each poin
                 summary = bullets[:4] if bullets else None
                 self._summary_cache[commit_hash] = summary
                 self._save_cache()
-
                 return summary
 
             else:
                 if not self.dry_run:
-                    print(
-                        f"  Warning: OpenAI API error {response.status_code}: {response.text[:100]}"
-                    )
+                    print(f"  Warning: {self.provider} API error {response.status_code}: {response.text[:100]}")
                 return None
 
         except Exception as e:
             if not self.dry_run:
-                print(
-                    f"  Warning: Could not generate OpenAI summary for {commit_hash[:7]}: {e}"
-                )
+                print(f"  Warning: Could not generate {self.provider} summary for {commit_hash[:7]}: {e}")
             return None
 
     def parse_commit(self, commit_hash: str) -> Optional[ChangeEntry]:
@@ -547,15 +473,8 @@ Please respond with only bullet points, starting each with "•". Keep each poin
         author, approver = (
             self.get_pr_details(full_hash, pr_number) if pr_number else (None, None)
         )
-        workflow_run_id, workflow_run_number, workflow_run_url = self.get_workflow_run(
-            full_hash
-        )
-
-        # Choose LLM method based on configuration
-        if self.use_openai:
-            summary = self.get_llm_summary_openai(full_hash, pr_number, title)
-        else:
-            summary = self.get_llm_summary(full_hash, pr_number, title)
+        workflow_run_number, workflow_run_url = self.get_workflow_run(full_hash)
+        summary = self.get_llm_summary(full_hash, pr_number, title)
 
         return ChangeEntry(
             commit_hash=full_hash,
@@ -566,7 +485,6 @@ Please respond with only bullet points, starting each with "•". Keep each poin
             date=date,
             author=author,
             approver=approver,
-            workflow_run_id=workflow_run_id,
             workflow_run_number=workflow_run_number,
             workflow_run_url=workflow_run_url,
             summary=summary,
@@ -707,118 +625,47 @@ Please respond with only bullet points, starting each with "•". Keep each poin
                 f.write(content)
             print(f"Changelog written to {changelog_path}")
 
-    def generate_from_date(self, since_date: str) -> None:
-        """Generate changelog from a specific date."""
-        print(f"Generating changelog for PRs merged to main since {since_date}...")
-
-        commits = self.get_commits_since_date(since_date)
+    def _generate(self, commits: List[str], empty_msg: str) -> None:
+        """Process commits and generate changelog."""
         if not commits or commits == [""]:
-            print("No commits found since that date.")
+            print(empty_msg)
             return
 
         print(f"Found {len(commits)} commits to process.")
+        entries = [e for c in commits if c and (e := self.parse_commit(c))]
 
-        entries = []
-        for commit in commits:
-            if not commit:
-                continue
-            entry = self.parse_commit(commit)
-            if entry:
-                entries.append(entry)
+        if not entries:
+            print("No PR entries found.")
+            return
 
         print(f"Processed {len(entries)} changelog entries.")
+        self.write_changelog(self.generate_changelog_content(entries))
 
-        content = self.generate_changelog_content(entries)
-        self.write_changelog(content)
+    def generate_from_date(self, since_date: str) -> None:
+        """Generate changelog from a specific date."""
+        print(f"Generating changelog since {since_date}...")
+        self._generate(self.get_commits_since_date(since_date), "No commits found.")
 
     def generate_between_commits(self, commit1: str, commit2: str) -> None:
         """Generate changelog between two commits."""
-        print(
-            f"Generating changelog for PRs merged to main between {commit1} and {commit2}..."
-        )
-
-        commits = self.get_commits_between(commit1, commit2)
-        if not commits or commits == [""]:
-            print("No commits found between those commits.")
-            return
-
-        print(f"Found {len(commits)} commits to process.")
-
-        entries = []
-        for commit in commits:
-            if not commit:
-                continue
-            entry = self.parse_commit(commit)
-            if entry:
-                entries.append(entry)
-
-        print(f"Processed {len(entries)} changelog entries.")
-
-        content = self.generate_changelog_content(entries)
-        self.write_changelog(content)
+        print(f"Generating changelog between {commit1} and {commit2}...")
+        self._generate(self.get_commits_between(commit1, commit2), "No commits found.")
 
     def generate_recent(self, count: int = 20) -> None:
         """Generate changelog from recent commits."""
-        print(f"Generating changelog from recent {count} PRs merged to main...")
-
-        commits = self.get_recent_commits(count)
-        if not commits or commits == [""]:
-            print("No recent commits found.")
-            return
-
-        print(f"Found {len(commits)} commits to process.")
-
-        entries = []
-        for commit in commits:
-            if not commit:
-                continue
-            entry = self.parse_commit(commit)
-            if entry:
-                entries.append(entry)
-
-        print(f"Processed {len(entries)} changelog entries.")
-
-        content = self.generate_changelog_content(entries)
-        self.write_changelog(content)
+        print(f"Generating changelog from recent {count} PRs...")
+        self._generate(self.get_recent_commits(count), "No commits found.")
 
     def generate_since_last_commit(self) -> None:
         """Generate changelog since the last CHANGELOG.md update."""
         last_commit = self.get_last_changelog_commit()
-
         if last_commit:
-            print(
-                f"Generating changelog for PRs merged to main since last changelog update ({last_commit[:7]})..."
-            )
+            print(f"Generating changelog since last update ({last_commit[:7]})...")
             commits = self.get_commits_between(last_commit, "HEAD")
         else:
-            # No previous changelog, generate from recent history
-            print(
-                "No previous changelog found, generating from recent 50 PRs merged to main..."
-            )
+            print("No previous changelog, generating from recent 50 PRs...")
             commits = self.get_recent_commits(50)
-
-        if not commits or commits == [""]:
-            print("No new commits found since last changelog update.")
-            return
-
-        print(f"Found {len(commits)} commits to process.")
-
-        entries = []
-        for commit in commits:
-            if not commit:
-                continue
-            entry = self.parse_commit(commit)
-            if entry:
-                entries.append(entry)
-
-        if not entries:
-            print("No new PR entries found.")
-            return
-
-        print(f"Processed {len(entries)} changelog entries.")
-
-        content = self.generate_changelog_content(entries)
-        self.write_changelog(content)
+        self._generate(commits, "No new commits found.")
 
 
 def main():
@@ -827,8 +674,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    # Dry run (safe, shows output without writing)
-    python changelog/run.py --dry-run
+    # Generate from recent commits (default: 20)
+    python changelog/run.py --recent 30
 
     # Generate from specific date
     python changelog/run.py --from-date 2025-08-01
@@ -836,28 +683,18 @@ Examples:
     # Generate between two commits
     python changelog/run.py --between 381e367 53d0f3d
 
-    # Generate from recent commits (default: 20)
-    python changelog/run.py --recent 30
-
     # Generate since last changelog update (for CI/CD)
-    python changelog/run.py --since-last-commit --write --with-summaries
+    python changelog/run.py --since-last-commit --with-summaries
 
-    # Actually write the file (remove --dry-run)
-    python changelog/run.py --from-date 2025-08-01 --write
+    # Preview without writing
+    python changelog/run.py --dry-run
         """,
     )
 
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        default=True,
-        help="Show what would be generated without writing files (default)",
-    )
-
-    parser.add_argument(
-        "--write",
-        action="store_true",
-        help="Actually write the changelog file (overrides --dry-run)",
+        help="Preview only, don't write files",
     )
 
     parser.add_argument(
@@ -889,35 +726,34 @@ Examples:
     parser.add_argument(
         "--with-summaries",
         action="store_true",
-        help="Generate LLM summaries for each PR (requires OPENAI_API_KEY or ANTHROPIC_API_KEY env var)",
+        help="Generate LLM summaries for each PR (auto-detects provider from API keys)",
     )
 
     parser.add_argument(
         "--model",
         type=str,
-        default="gpt-4o-mini",
-        help="LLM model to use for summaries (default: gpt-4o-mini for OpenAI, claude-3-haiku-20240307 for Anthropic)",
+        default=None,
+        help="LLM model to use (default: auto-detected based on provider)",
     )
 
     parser.add_argument(
-        "--use-openai",
-        action="store_true",
-        help="Use OpenAI API instead of Anthropic (requires OPENAI_API_KEY env var)",
+        "--provider",
+        type=str,
+        choices=list(PROVIDERS.keys()),
+        default=None,
+        help="LLM provider to use (default: auto-detect from available API keys)",
     )
 
     args = parser.parse_args()
 
-    # Determine if we should actually write - --write flag overrides default dry_run
-    if args.write:
-        print("WRITE MODE: Files will be modified!")
-    else:
-        print("DRY RUN MODE: No files will be modified (safe)")
+    if args.dry_run:
+        print("DRY RUN MODE: No files will be modified")
 
     generator = ChangelogGenerator(
-        dry_run=not args.write,  # If --write is passed, dry_run is False
+        dry_run=args.dry_run,
         with_summaries=args.with_summaries,
         model=args.model,
-        use_openai=args.use_openai,
+        provider=args.provider,
     )
 
     if args.from_date:

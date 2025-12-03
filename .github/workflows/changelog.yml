@@ -30,10 +30,10 @@ on:
         type: boolean
         default: false
       use-pull-request:
-        description: 'Create PR instead of direct commit (required for protected branches)'
+        description: 'Create PR instead of direct commit. Use true for repos with protected main branch.'
         required: false
         type: boolean
-        default: true
+        default: false
     secrets:
       ANTHROPIC_API_KEY:
         description: 'Anthropic API key for AI summaries'
