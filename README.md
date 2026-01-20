@@ -9,7 +9,7 @@ Automated changelog generator that extracts PR merge commits from a git reposito
   - PR author and approver
   - GitHub Actions workflow run links
   - JIRA ticket references (any PROJECT-123 pattern)
-- Optional AI-generated summaries using Anthropic Claude or OpenAI
+- Optional AI-generated summaries using Anthropic Claude, OpenAI, or Google Gemini
 - Smart caching to avoid re-processing commits
 - Multiple generation modes: date range, commit range, recent N commits, or incremental
 - Safe dry-run mode by default
@@ -108,10 +108,22 @@ jobs:
   changelog:
     uses: jmackown/changelog_generator/.github/workflows/changelog.yml@main
     with:
-      use-openai: true
+      provider: 'openai'
       model: 'gpt-4o-mini'
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+```
+
+**Use Gemini:**
+```yaml
+jobs:
+  changelog:
+    uses: jmackown/changelog_generator/.github/workflows/changelog.yml@main
+    with:
+      provider: 'gemini'
+      model: 'gemini-2.0-flash-lite'
+    secrets:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 ```
 
 **Use better AI model (more expensive):**
@@ -150,7 +162,7 @@ jobs:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
-**Note:** Default is `use-pull-request: true` (creates PRs) which is required for repos with branch protection rules.
+**Note:** Default is `use-pull-request: false` (direct commits). Set to `true` for repos with branch protection rules.
 
 **All available options:**
 ```yaml
@@ -160,12 +172,13 @@ jobs:
     with:
       python-version: '3.11'           # Python version (default: 3.11)
       with-summaries: true             # AI summaries (default: true)
-      model: 'claude-3-5-haiku-20241022'  # LLM model
-      use-openai: false                # Use OpenAI instead (default: false)
-      use-pull-request: true           # Create PR (default: true, set false for direct commit)
+      model: 'claude-3-5-haiku-20241022'  # LLM model (auto-detected if not set)
+      provider: ''                     # LLM provider: anthropic, openai, gemini (auto-detected from API keys)
+      use-pull-request: false          # Create PR (default: false, set true for protected branches)
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}  # Only if use-openai: true
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 ```
 
 **Pin to specific version (recommended for stability):**
@@ -239,34 +252,33 @@ python changelog/run.py --dry-run --between abc123 def456
 **Generate changelog:**
 ```bash
 # Generate from recent 30 PRs
-python changelog/run.py --write --recent 30
+python changelog/run.py --recent 30
 
 # Generate from specific date
-python changelog/run.py --write --from-date 2025-01-01
+python changelog/run.py --from-date 2025-01-01
 
-# Generate with AI summaries
-python changelog/run.py --write --recent 20 --with-summaries
+# Generate with AI summaries (auto-detects provider from API keys)
+python changelog/run.py --recent 20 --with-summaries
 
-# Use OpenAI instead of Anthropic
-python changelog/run.py --write --recent 20 --with-summaries --use-openai
+# Use specific provider
+python changelog/run.py --recent 20 --with-summaries --provider openai
 
 # Incremental update (since last changelog commit)
-python changelog/run.py --write --since-last-commit
+python changelog/run.py --since-last-commit
 ```
 
 ### CLI Arguments
 
 | Argument | Description | Default |
 |----------|-------------|---------|
-| `--dry-run` | Preview only, don't write files | `true` |
-| `--write` | Actually write CHANGELOG.md | Required to save |
+| `--dry-run` | Preview only, don't write files | `false` (writes by default) |
 | `--from-date YYYY-MM-DD` | Generate from specific date | - |
 | `--between COMMIT1 COMMIT2` | Generate between two commits | - |
 | `--recent N` | Generate from recent N commits | 20 |
 | `--since-last-commit` | Incremental update (for CI/CD) | - |
 | `--with-summaries` | Generate AI summaries | `false` |
-| `--model MODEL` | LLM model to use | `claude-3-5-haiku-20241022` |
-| `--use-openai` | Use OpenAI instead of Anthropic | `false` |
+| `--model MODEL` | LLM model to use | Auto-detected from provider |
+| `--provider NAME` | LLM provider (`anthropic`, `openai`, `gemini`) | Auto-detected from API keys |
 
 ## Troubleshooting
 
@@ -322,10 +334,10 @@ If loops still happen:
 1. **Fetch commits**: Uses `git log --first-parent --grep='(#'` to find only PR merge commits on main
 2. **Enrich metadata**: Calls GitHub CLI (`gh pr list`, `gh run list`) to get author, approver, workflow data
 3. **Extract ticket refs**: Parses commit messages for JIRA/ticket references (any PROJECT-123 pattern)
-4. **Generate summaries** (optional): Sends PR context to Anthropic/OpenAI API for bullet-point summaries
+4. **Generate summaries** (optional): Sends PR context to Anthropic/OpenAI/Gemini API for bullet-point summaries
 5. **Cache results**: Stores summaries in `.changelog-summaries.json` to avoid re-processing
 6. **Format output**: Generates Markdown with clickable links and blockquote cards
-7. **Write file**: Saves to `CHANGELOG.md` (only if `--write` specified)
+7. **Write file**: Saves to `CHANGELOG.md` (unless `--dry-run` specified)
 8. **Create PR**: Uses `peter-evans/create-pull-request` to open a PR with the changes
 9. **Auto-merge** (optional): If enabled, PR automatically merges after checks pass
 
@@ -335,12 +347,13 @@ AI summaries cost money:
 - **Anthropic Claude Haiku**: ~$0.001 per PR summary (very cheap)
 - **Anthropic Claude Sonnet**: ~$0.003 per PR summary (better quality)
 - **OpenAI GPT-4o-mini**: ~$0.0001 per PR summary (cheapest)
+- **Google Gemini Flash Lite**: Free tier available, then ~$0.0001 per PR summary
 
 For 100 PRs/month with Haiku: ~$0.10/month. Caching prevents re-processing commits.
 
 To minimize costs:
 - Use `with-summaries: false` to disable AI entirely (free)
-- Use `gpt-4o-mini` (cheapest option)
+- Use `gemini-2.0-flash-lite` or `gpt-4o-mini` (cheapest options)
 - Caching prevents re-generating summaries for already-processed commits
 
 ## License

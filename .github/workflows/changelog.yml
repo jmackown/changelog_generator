@@ -24,11 +24,11 @@ on:
         required: false
         type: string
         default: 'claude-3-5-haiku-20241022'
-      use-openai:
-        description: 'Use OpenAI instead of Anthropic'
+      provider:
+        description: 'LLM provider (anthropic, openai, gemini). Auto-detects from API keys if not set.'
         required: false
-        type: boolean
-        default: false
+        type: string
+        default: ''
       use-pull-request:
         description: 'Create PR instead of direct commit. Use true for repos with protected main branch.'
         required: false
@@ -40,6 +40,9 @@ on:
         required: false
       OPENAI_API_KEY:
         description: 'OpenAI API key (alternative to Anthropic)'
+        required: false
+      GEMINI_API_KEY:
+        description: 'Gemini API key (alternative to Anthropic/OpenAI)'
         required: false
 
 jobs:
@@ -83,14 +86,14 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python .changelog_generator/changelog/run.py \
             --since-last-commit \
-            --write \
             ${{ inputs.with-summaries && '--with-summaries' || '' }} \
-            ${{ inputs.use-openai && '--use-openai' || '' }} \
-            --model ${{ inputs.model || 'claude-3-5-haiku-20241022' }}
+            ${{ inputs.provider && format('--provider {0}', inputs.provider) || '' }} \
+            ${{ inputs.with-summaries && format('--model {0}', inputs.model || 'claude-3-5-haiku-20241022') || '' }}
 
       - name: Cleanup temporary files
         run: |
