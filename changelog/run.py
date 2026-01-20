@@ -297,6 +297,76 @@ class ChangelogGenerator:
                 print(f"Warning: Could not get PR details for {commit_hash[:7]}: {e}")
             return None, None
 
+    def get_open_pr_details(self, pr_number: str) -> dict:
+        """Get details for an open PR by number using GitHub CLI."""
+        try:
+            cmd = [
+                "gh", "pr", "view", pr_number,
+                "--json", "number,title,author,reviews,body,headRefOid"
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            return json.loads(result.stdout)
+        except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
+            if not self.dry_run:
+                print(f"Warning: Could not get PR #{pr_number} details: {e}")
+            return {}
+
+    def create_entry_for_pr(self, pr_number: str) -> Optional[ChangeEntry]:
+        """Create a ChangeEntry for a specific PR (doesn't need to be merged)."""
+        if not self.dry_run:
+            print(f"Fetching details for PR #{pr_number}...")
+
+        pr_data = self.get_open_pr_details(pr_number)
+        if not pr_data:
+            return None
+
+        title = pr_data.get("title", f"PR #{pr_number}")
+        author = pr_data.get("author", {}).get("login")
+        head_sha = pr_data.get("headRefOid", "")
+
+        # Find approver (first approved review)
+        approver = None
+        reviews = pr_data.get("reviews", [])
+        for review in reviews:
+            if review.get("state") == "APPROVED":
+                approver = review.get("author", {}).get("login")
+                break
+
+        # Parse JIRA ticket from title
+        jira_match = re.search(r"([A-Z]+-\d+)", title)
+        jira_ticket = jira_match.group(1) if jira_match else None
+
+        # Clean title (remove PR number suffix if present)
+        clean_title = re.sub(r"\s*\(#\d+\)\s*$", "", title).strip()
+
+        # Get LLM summary if enabled
+        summary = self.get_llm_summary(head_sha or pr_number, pr_number, clean_title)
+
+        return ChangeEntry(
+            commit_hash=head_sha or f"pr-{pr_number}",
+            short_hash=head_sha[:7] if head_sha else f"#{pr_number}",
+            title=clean_title,
+            pr_number=pr_number,
+            jira_ticket=jira_ticket,
+            date=datetime.now(),
+            author=author,
+            approver=approver,
+            workflow_run_number=None,
+            workflow_run_url=None,
+            summary=summary,
+        )
+
+    def generate_for_pr(self, pr_number: str) -> None:
+        """Generate a changelog entry for a specific PR and write it."""
+        if not self.dry_run:
+            print(f"\nGenerating changelog entry for PR #{pr_number}...")
+
+        entry = self.create_entry_for_pr(pr_number)
+        if entry:
+            self.write_changelog(self.generate_changelog_content([entry]))
+        else:
+            print(f"Could not create entry for PR #{pr_number}")
+
     def get_workflow_run(self, commit_hash: str) -> tuple[Optional[str], Optional[str]]:
         """Get GitHub Actions workflow run number and URL for commit."""
         try:
@@ -724,6 +794,13 @@ Examples:
     )
 
     parser.add_argument(
+        "--for-pr",
+        type=str,
+        metavar="NUMBER",
+        help="Generate changelog entry for a specific PR number (for update-branch mode)",
+    )
+
+    parser.add_argument(
         "--with-summaries",
         action="store_true",
         help="Generate LLM summaries for each PR (auto-detects provider from API keys)",
@@ -756,7 +833,9 @@ Examples:
         provider=args.provider,
     )
 
-    if args.from_date:
+    if args.for_pr:
+        generator.generate_for_pr(args.for_pr)
+    elif args.from_date:
         generator.generate_from_date(args.from_date)
     elif args.between:
         generator.generate_between_commits(args.between[0], args.between[1])

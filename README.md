@@ -148,21 +148,76 @@ jobs:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
-**Direct commits (no PR):**
+### Changelog Modes
 
-Use this for personal projects or repos without branch protection. Changelog updates commit directly to main with `[skip ci]` to prevent infinite loops.
+The workflow supports three modes for committing changelog updates:
+
+| Mode | Trigger | Behavior | Best for |
+|------|---------|----------|----------|
+| `direct-commit` | PR merges to main | Commits changelog directly to main | Personal projects, no branch protection |
+| `pull-request` | PR merges to main | Creates separate PR for changelog | Repos with branch protection |
+| `update-branch` | PR is approved | Adds changelog to the PR branch before merge | Clean history, changelog in PR |
+
+**Mode: direct-commit (default)**
+
+Commits changelog directly to main after a PR merges:
 
 ```yaml
+name: Generate Changelog
+on:
+  push:
+    branches: [main]
+
 jobs:
   changelog:
     uses: jmackown/changelog_generator/.github/workflows/changelog.yml@main
     with:
-      use-pull-request: false  # Commit directly to main (simpler, no manual merges)
+      mode: 'direct-commit'
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
-**Note:** Default is `use-pull-request: false` (direct commits). Set to `true` for repos with branch protection rules.
+**Mode: pull-request**
+
+Creates a separate PR for changelog updates (required for protected branches):
+
+```yaml
+name: Generate Changelog
+on:
+  push:
+    branches: [main]
+
+jobs:
+  changelog:
+    uses: jmackown/changelog_generator/.github/workflows/changelog.yml@main
+    with:
+      mode: 'pull-request'
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+**Mode: update-branch**
+
+Adds changelog entry to the PR branch when approved (cleanest option - changelog is part of the PR):
+
+```yaml
+name: Generate Changelog
+on:
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  changelog:
+    if: github.event.review.state == 'approved'
+    uses: jmackown/changelog_generator/.github/workflows/changelog.yml@main
+    with:
+      mode: 'update-branch'
+      pr-number: ${{ github.event.pull_request.number }}
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+**Note:** With `update-branch` mode, there's potential for merge conflicts if multiple PRs touch the changelog simultaneously. This is rare if PRs are merged promptly after approval.
 
 **All available options:**
 ```yaml
@@ -174,7 +229,8 @@ jobs:
       with-summaries: true             # AI summaries (default: true)
       model: 'claude-3-5-haiku-20241022'  # LLM model (auto-detected if not set)
       provider: ''                     # LLM provider: anthropic, openai, gemini (auto-detected from API keys)
-      use-pull-request: false          # Create PR (default: false, set true for protected branches)
+      mode: 'direct-commit'            # How to commit: direct-commit, pull-request, update-branch
+      pr-number: ''                    # PR number (required for update-branch mode)
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -276,6 +332,7 @@ python changelog/run.py --since-last-commit
 | `--between COMMIT1 COMMIT2` | Generate between two commits | - |
 | `--recent N` | Generate from recent N commits | 20 |
 | `--since-last-commit` | Incremental update (for CI/CD) | - |
+| `--for-pr NUMBER` | Generate entry for a specific PR (for update-branch mode) | - |
 | `--with-summaries` | Generate AI summaries | `false` |
 | `--model MODEL` | LLM model to use | Auto-detected from provider |
 | `--provider NAME` | LLM provider (`anthropic`, `openai`, `gemini`) | Auto-detected from API keys |

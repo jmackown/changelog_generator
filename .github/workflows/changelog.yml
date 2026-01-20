@@ -29,11 +29,16 @@ on:
         required: false
         type: string
         default: ''
-      use-pull-request:
-        description: 'Create PR instead of direct commit. Use true for repos with protected main branch.'
+      mode:
+        description: 'How to commit changelog: direct-commit (to main), pull-request (separate PR), update-branch (to PR branch)'
         required: false
-        type: boolean
-        default: false
+        type: string
+        default: 'direct-commit'
+      pr-number:
+        description: 'PR number (required for update-branch mode)'
+        required: false
+        type: string
+        default: ''
     secrets:
       ANTHROPIC_API_KEY:
         description: 'Anthropic API key for AI summaries'
@@ -64,6 +69,18 @@ jobs:
         with:
           fetch-depth: 0  # Need full history to find last changelog commit
           token: ${{ secrets.GITHUB_TOKEN }}
+          # For update-branch mode, checkout the PR's head branch
+          ref: ${{ inputs.mode == 'update-branch' && format('refs/pull/{0}/head', inputs.pr-number) || '' }}
+
+      - name: Checkout PR branch for update-branch mode
+        if: inputs.mode == 'update-branch' && inputs.pr-number != ''
+        run: |
+          # Get the PR's head branch name and check it out
+          PR_BRANCH=$(gh pr view ${{ inputs.pr-number }} --json headRefName -q '.headRefName')
+          git checkout -B "$PR_BRANCH"
+          git pull origin "$PR_BRANCH" || true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Checkout changelog_generator for changelog script
         uses: actions/checkout@v4
@@ -82,7 +99,22 @@ jobs:
         run: |
           pip install requests
 
-      - name: Generate changelog
+      - name: Generate changelog (update-branch mode)
+        if: inputs.mode == 'update-branch' && inputs.pr-number != ''
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python .changelog_generator/changelog/run.py \
+            --for-pr ${{ inputs.pr-number }} \
+            ${{ inputs.with-summaries && '--with-summaries' || '' }} \
+            ${{ inputs.provider && format('--provider {0}', inputs.provider) || '' }} \
+            ${{ inputs.with-summaries && format('--model {0}', inputs.model || 'claude-3-5-haiku-20241022') || '' }}
+
+      - name: Generate changelog (direct-commit or pull-request mode)
+        if: inputs.mode != 'update-branch'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -108,8 +140,20 @@ jobs:
             echo "has_changes=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Direct commit (if use-pull-request is false)
-        if: steps.check_changes.outputs.has_changes == 'true' && !inputs.use-pull-request
+      - name: Commit to PR branch (update-branch mode)
+        if: steps.check_changes.outputs.has_changes == 'true' && inputs.mode == 'update-branch' && inputs.pr-number != ''
+        run: |
+          PR_BRANCH=$(gh pr view ${{ inputs.pr-number }} --json headRefName -q '.headRefName')
+          git config user.name "changelog-bot"
+          git config user.email "changelog-bot@users.noreply.github.com"
+          git add CHANGELOG.md .changelog-summaries.json
+          git commit -m "docs: add changelog entry for PR #${{ inputs.pr-number }} [skip ci]"
+          git push origin "$PR_BRANCH"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Direct commit to main (direct-commit mode)
+        if: steps.check_changes.outputs.has_changes == 'true' && inputs.mode == 'direct-commit'
         run: |
           git config user.name "changelog-bot"
           git config user.email "changelog-bot@users.noreply.github.com"
@@ -117,8 +161,8 @@ jobs:
           git commit -m "docs: update changelog [skip ci]"
           git push
 
-      - name: Create Pull Request (if use-pull-request is true)
-        if: steps.check_changes.outputs.has_changes == 'true' && inputs.use-pull-request
+      - name: Create Pull Request (pull-request mode)
+        if: steps.check_changes.outputs.has_changes == 'true' && inputs.mode == 'pull-request'
         uses: peter-evans/create-pull-request@v6
         with:
           commit-message: "docs: update changelog [skip ci]"
