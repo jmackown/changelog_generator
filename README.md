@@ -320,44 +320,72 @@ gh auth login
 
 ### Usage
 
-**Dry run (preview only):**
+**Default behavior** generates changelog from 2025-01-01 without AI summaries (fast, free):
+
 ```bash
-# Preview recent 20 PRs
+# Generate from 2025 onwards (default)
+python changelog/run.py
+
+# Dry run to preview
 python changelog/run.py --dry-run
-
-# Preview from specific date
-python changelog/run.py --dry-run --from-date 2025-01-01
-
-# Preview between two commits
-python changelog/run.py --dry-run --between abc123 def456
 ```
 
-**Generate changelog:**
+**Other date ranges:**
 ```bash
-# Generate from recent 30 PRs
-python changelog/run.py --recent 30
+# From specific date
+python changelog/run.py --from-date 2024-01-01
 
-# Generate from specific date
-python changelog/run.py --from-date 2025-01-01
+# Between two commits
+python changelog/run.py --between abc123 def456
 
-# Generate with AI summaries (auto-detects provider from API keys)
-python changelog/run.py --recent 20 --with-summaries
-
-# Use specific provider
-python changelog/run.py --recent 20 --with-summaries --provider openai
+# Recent N commits
+python changelog/run.py --recent 50
 
 # Incremental update (since last changelog commit)
 python changelog/run.py --since-last-commit
 ```
+
+**With AI summaries:**
+```bash
+# Generate with summaries (uses tokens)
+python changelog/run.py --with-summaries
+
+# Use specific provider
+python changelog/run.py --with-summaries --provider gemini
+```
+
+### Backfilling Summaries
+
+For existing changelogs, use the separate backfill script to add AI summaries without regenerating everything:
+
+```bash
+# Add summaries to entries from last 6 months
+python changelog/backfill_summaries.py --since 2024-07-01
+
+# Limit to 20 entries (to control token usage)
+python changelog/backfill_summaries.py --limit 20
+
+# Preview without writing
+python changelog/backfill_summaries.py --dry-run --limit 10
+
+# Use cheapest provider for bulk backfill
+python changelog/backfill_summaries.py --provider gemini --limit 50
+```
+
+The backfill script:
+- Reads existing `CHANGELOG.md`
+- Finds entries without summaries
+- Generates summaries using LLM (respects `.changelog-prompt.txt`)
+- Updates the file in place
 
 ### CLI Arguments
 
 | Argument | Description | Default |
 |----------|-------------|---------|
 | `--dry-run` | Preview only, don't write files | `false` (writes by default) |
-| `--from-date YYYY-MM-DD` | Generate from specific date | - |
+| `--from-date YYYY-MM-DD` | Generate from specific date | `2025-01-01` |
 | `--between COMMIT1 COMMIT2` | Generate between two commits | - |
-| `--recent N` | Generate from recent N commits | 20 |
+| `--recent N` | Generate from recent N commits (overrides default date) | - |
 | `--since-last-commit` | Incremental update (for CI/CD) | - |
 | `--for-pr NUMBER` | Generate entry for a specific PR (for update-branch mode) | - |
 | `--with-summaries` | Generate AI summaries | `false` |

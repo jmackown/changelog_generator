@@ -806,7 +806,7 @@ Examples:
         "--recent",
         type=int,
         default=20,
-        help="Generate from recent N commits (default: 20)",
+        help="Generate from recent N commits (overrides default 2025-01-01 start)",
     )
 
     parser.add_argument(
@@ -871,8 +871,11 @@ Examples:
         generator.generate_between_commits(args.between[0], args.between[1])
     elif args.since_last_commit:
         generator.generate_since_last_commit()
-    else:
+    elif args.recent != 20:  # User explicitly set --recent
         generator.generate_recent(args.recent)
+    else:
+        # Default: generate from start of 2025
+        generator.generate_from_date("2025-01-01")
 
 
 if __name__ == "__main__":
