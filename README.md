@@ -10,6 +10,7 @@ Automated changelog generator that extracts PR merge commits from a git reposito
   - GitHub Actions workflow run links
   - JIRA ticket references (any PROJECT-123 pattern)
 - Optional AI-generated summaries using Anthropic Claude, OpenAI, or Google Gemini
+- Customizable prompts per repository
 - Smart caching to avoid re-processing commits
 - Multiple generation modes: date range, commit range, recent N commits, or incremental
 - Safe dry-run mode by default
@@ -246,6 +247,32 @@ jobs:
     #                                                                     Use git tag
 ```
 
+## Custom Prompts
+
+You can customize the AI summary prompt per repository by creating a `.changelog-prompt.txt` file in your repo root.
+
+**Example `.changelog-prompt.txt`:**
+```
+Summarize this pull request for a non-technical audience. Focus on user-facing changes and business value.
+
+{context}
+
+Respond with 2-3 bullet points starting with "•". Keep each under 20 words.
+```
+
+The `{context}` placeholder is replaced with:
+- PR Title
+- PR Description (up to `--context-limit` characters)
+- Files Changed
+
+**Use cases:**
+- Different tone (technical vs user-friendly)
+- Different language
+- Repo-specific instructions ("always mention API version affected")
+- Different output format (categories, longer summaries, etc.)
+
+If no `.changelog-prompt.txt` exists, the default prompt is used.
+
 ## Output Format
 
 The generated changelog uses beautiful blockquote-style cards:
@@ -336,6 +363,7 @@ python changelog/run.py --since-last-commit
 | `--with-summaries` | Generate AI summaries | `false` |
 | `--model MODEL` | LLM model to use | Auto-detected from provider |
 | `--provider NAME` | LLM provider (`anthropic`, `openai`, `gemini`) | Auto-detected from API keys |
+| `--context-limit N` | Max chars of PR description for LLM context | 3000 |
 
 ## Troubleshooting
 

@@ -110,9 +110,11 @@ class ChangelogGenerator:
         with_summaries: bool = False,
         model: Optional[str] = None,
         provider: Optional[str] = None,
+        context_limit: int = 3000,
     ):
         self.dry_run = dry_run
         self.with_summaries = with_summaries
+        self.context_limit = context_limit
 
         # Auto-detect provider if not specified
         self.provider = provider or detect_provider()
@@ -127,6 +129,7 @@ class ChangelogGenerator:
         self.repo_root = Path.cwd()
         self.cache_file = self.repo_root / ".changelog-summaries.json"
         self._summary_cache = self._load_cache()
+        self._custom_prompt = self._load_custom_prompt()
         self.github_repo_url = self._get_github_repo_url()
 
     def run_git_command(self, cmd: List[str]) -> str:
@@ -163,6 +166,21 @@ class ChangelogGenerator:
                     json.dump(self._summary_cache, f, indent=2)
             except IOError as e:
                 print(f"Warning: Could not save cache: {e}")
+
+    def _load_custom_prompt(self) -> Optional[str]:
+        """Load custom prompt from .changelog-prompt.txt if it exists."""
+        prompt_file = self.repo_root / ".changelog-prompt.txt"
+        try:
+            if prompt_file.exists():
+                with open(prompt_file, "r") as f:
+                    prompt = f.read().strip()
+                    if prompt:
+                        if not self.dry_run:
+                            print(f"Using custom prompt from {prompt_file}")
+                        return prompt
+        except IOError as e:
+            print(f"Warning: Could not read custom prompt: {e}")
+        return None
 
     def _get_github_repo_url(self) -> Optional[str]:
         """Extract GitHub repo URL from git remote."""
@@ -443,12 +461,16 @@ class ChangelogGenerator:
         # Construct context for LLM
         context_parts = [f"PR Title: {title}"]
         if pr_body and len(pr_body) > 0:
-            context_parts.append(f"PR Description:\n{pr_body[:1000]}")
+            context_parts.append(f"PR Description:\n{pr_body[:self.context_limit]}")
         if file_stats:
             context_parts.append(f"Files Changed:\n{file_stats}")
         context = "\n\n".join(context_parts)
 
-        prompt = f"""Please analyze this pull request and provide 2-4 concise bullet points summarizing what was changed and why. Focus on the functional changes and their purpose, not technical implementation details.
+        # Use custom prompt if available, otherwise use default
+        if self._custom_prompt:
+            prompt = self._custom_prompt.replace("{context}", context)
+        else:
+            prompt = f"""Please analyze this pull request and provide 2-4 concise bullet points summarizing what was changed and why. Focus on the functional changes and their purpose, not technical implementation details.
 
 {context}
 
@@ -821,6 +843,13 @@ Examples:
         help="LLM provider to use (default: auto-detect from available API keys)",
     )
 
+    parser.add_argument(
+        "--context-limit",
+        type=int,
+        default=3000,
+        help="Max characters of PR description to include in LLM context (default: 3000)",
+    )
+
     args = parser.parse_args()
 
     if args.dry_run:
@@ -831,6 +860,7 @@ Examples:
         with_summaries=args.with_summaries,
         model=args.model,
         provider=args.provider,
+        context_limit=args.context_limit,
     )
 
     if args.for_pr:
