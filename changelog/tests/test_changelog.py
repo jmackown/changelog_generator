@@ -372,15 +372,15 @@ class TestMergeWithExisting:
         content = generator.generate_changelog_content([entry])
 
         assert "# Changelog" in content
-        assert "## [Unreleased]" in content
+        assert "## 2025" in content  # Year-based section
         assert "first commit" in content
 
-    def test_merge_prepends_to_unreleased(self, generator, tmp_path):
-        """New entries are prepended to existing [Unreleased] section."""
-        # Create existing changelog
+    def test_merge_prepends_to_year_section(self, generator, tmp_path):
+        """New entries are prepended to existing year section."""
+        # Create existing changelog with year-based sections
         existing = """# Changelog
 
-## [Unreleased]
+## 2025
 
 > ### 📅 2025-01-10 | old entry ([#1](https://github.com/test/repo/pull/1))
 > [old123](https://github.com/test/repo/commit/old123)
@@ -410,7 +410,7 @@ class TestMergeWithExisting:
         assert "new entry" in content
         # Old entry should be preserved
         assert "old entry" in content
-        # New should come before old
+        # New should come before old (newer date)
         new_pos = content.find("new entry")
         old_pos = content.find("old entry")
         assert new_pos < old_pos
@@ -419,7 +419,7 @@ class TestMergeWithExisting:
         """Generation timestamp is updated."""
         existing = """# Changelog
 
-## [Unreleased]
+## 2025
 
 ---
 *Generated on 2025-01-01 00:00:00*

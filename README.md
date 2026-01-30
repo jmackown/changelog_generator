@@ -275,20 +275,29 @@ If no `.changelog-prompt.txt` exists, the default prompt is used.
 
 ## Output Format
 
-The generated changelog uses beautiful blockquote-style cards:
+The generated changelog uses year-based sections with blockquote-style cards:
 
 ```markdown
 # Changelog
 
-## [Unreleased]
+## 2025
 
-> ### 📅 2025-01-28 | Add user authentication (#42)
+> ### 📅 2025-01-28 | Add user authentication ([#42](https://github.com/org/repo/pull/42))
 > **Author:** @alice | **Approved:** @bob | **Ticket:** AUTH-123 | **Run:** [#123](https://github.com/org/repo/actions/runs/123)
 >
 > • Implemented JWT-based authentication for API endpoints
 > • Added user registration and login flows
 > • Integrated password hashing with bcrypt
 > [abc1234](https://github.com/org/repo/commit/abc1234)
+
+## 2024
+
+> ### 📅 2024-12-15 | Initial release ([#1](https://github.com/org/repo/pull/1))
+> **Author:** @alice
+> [def5678](https://github.com/org/repo/commit/def5678)
+
+---
+*Generated on 2025-01-28 10:30:00*
 ```
 
 ## Advanced: Running Locally

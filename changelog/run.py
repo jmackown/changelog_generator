@@ -582,124 +582,138 @@ Please respond with only bullet points, starting each with "•". Keep each poin
             summary=summary,
         )
 
+    def _format_entry(self, entry: ChangeEntry) -> List[str]:
+        """Format a single entry as markdown lines."""
+        lines = []
+        date_str = entry.date.strftime("%Y-%m-%d")
+
+        # Create PR link if we have repo URL and PR number
+        title_with_link = entry.title
+        if entry.pr_number and self.github_repo_url:
+            pr_link = f"{self.github_repo_url}/pull/{entry.pr_number}"
+            title_with_link += f" ([#{entry.pr_number}]({pr_link}))"
+        elif entry.pr_number:
+            title_with_link += f" (#{entry.pr_number})"
+
+        # Start the blockquote card
+        lines.append(f"> ### 📅 {date_str} | {title_with_link}")
+
+        # Add author, approver, ticket, and workflow run info
+        details = []
+        if entry.author:
+            details.append(f"**Author:** @{entry.author}")
+        if entry.approver:
+            details.append(f"**Approved:** @{entry.approver}")
+        if entry.jira_ticket:
+            details.append(f"**Ticket:** {entry.jira_ticket}")
+        if entry.workflow_run_number and entry.workflow_run_url:
+            details.append(
+                f"**Run:** [#{entry.workflow_run_number}]({entry.workflow_run_url})"
+            )
+        elif entry.workflow_run_number:
+            details.append(f"**Run:** #{entry.workflow_run_number}")
+
+        if details:
+            lines.append(f"> {' | '.join(details)}  ")
+
+        # Add empty line before summary bullets
+        if entry.summary:
+            lines.append(">")
+            for bullet in entry.summary:
+                lines.append(f"> • {bullet}  ")
+
+        # Add commit hash at the end
+        commit_link = (
+            f"{self.github_repo_url}/commit/{entry.commit_hash}"
+            if self.github_repo_url
+            else None
+        )
+        if commit_link:
+            lines.append(f"> [{entry.short_hash}]({commit_link})")
+        else:
+            lines.append(f"> [{entry.short_hash}]")
+
+        lines.append("")  # Empty line between cards
+        return lines
+
     def generate_changelog_content(self, entries: List[ChangeEntry]) -> str:
-        """Generate the changelog markdown content, merging with existing file."""
+        """Generate the changelog markdown content with year-based sections."""
         if not entries:
             return "# Changelog\n\nNo changes found for the specified criteria.\n"
 
         # Sort entries by date (newest first)
         sorted_entries = sorted(entries, key=lambda x: x.date, reverse=True)
 
-        # Read existing CHANGELOG.md if it exists
+        # Group entries by year
+        entries_by_year: dict[int, List[ChangeEntry]] = {}
+        for entry in sorted_entries:
+            year = entry.date.year
+            if year not in entries_by_year:
+                entries_by_year[year] = []
+            entries_by_year[year].append(entry)
+
+        # Read existing CHANGELOG.md to extract existing entries by year
         changelog_path = self.repo_root / "CHANGELOG.md"
-        existing_content = ""
-        existing_entries_section = ""
+        existing_entries_by_year: dict[int, str] = {}
 
         if changelog_path.exists():
             with open(changelog_path, "r") as f:
                 existing_content = f.read()
 
-            # Extract existing entries from [Unreleased] section
-            # Find everything after "## [Unreleased]" and before the next "##" or "---"
-            unreleased_match = re.search(
-                r"## \[Unreleased\]\s*\n(.*?)(?=\n##|\n---|$)",
-                existing_content,
-                re.DOTALL
-            )
-            if unreleased_match:
-                existing_entries_section = unreleased_match.group(1).strip()
+            # Strip out footer (--- and timestamp)
+            existing_content = re.sub(r'\n---\n\*Generated on.*?\*\n?', '', existing_content)
 
-        # Build new entries markdown
-        new_entries_content = []
+            # Extract existing entries for each year section
+            year_pattern = r"## (\d{4})\s*\n(.*?)(?=\n## \d{4}|\Z)"
+            for match in re.finditer(year_pattern, existing_content, re.DOTALL):
+                year = int(match.group(1))
+                content = match.group(2).strip()
+                if content:
+                    existing_entries_by_year[year] = content
 
-        for entry in sorted_entries:
-            # Beautiful card-style blockquote format
-            date_str = entry.date.strftime("%Y-%m-%d")
+        # Build content with year sections
+        content_lines = ["# Changelog\n"]
 
-            # Create PR link if we have repo URL and PR number
-            title_with_link = entry.title
-            if entry.pr_number and self.github_repo_url:
-                pr_link = f"{self.github_repo_url}/pull/{entry.pr_number}"
-                title_with_link += f" ([#{entry.pr_number}]({pr_link}))"
-            elif entry.pr_number:
-                title_with_link += f" (#{entry.pr_number})"
+        # Get all years (from new and existing entries)
+        all_years = sorted(
+            set(entries_by_year.keys()) | set(existing_entries_by_year.keys()),
+            reverse=True
+        )
 
-            # Start the blockquote card
-            new_entries_content.append(f"> ### 📅 {date_str} | {title_with_link}")
+        for year in all_years:
+            content_lines.append(f"## {year}\n")
 
-            # Add author, approver, ticket, and workflow run info
-            details = []
-            if entry.author:
-                details.append(f"**Author:** @{entry.author}")
-            if entry.approver:
-                details.append(f"**Approved:** @{entry.approver}")
-            if entry.jira_ticket:
-                details.append(f"**Ticket:** {entry.jira_ticket}")
-            if entry.workflow_run_number and entry.workflow_run_url:
-                details.append(
-                    f"**Run:** [#{entry.workflow_run_number}]({entry.workflow_run_url})"
-                )
-            elif entry.workflow_run_number:
-                details.append(f"**Run:** #{entry.workflow_run_number}")
+            # Add new entries for this year
+            if year in entries_by_year:
+                for entry in entries_by_year[year]:
+                    content_lines.extend(self._format_entry(entry))
 
-            if details:
-                new_entries_content.append(f"> {' | '.join(details)}  ")
+            # Add existing entries for this year (that aren't duplicates)
+            if year in existing_entries_by_year:
+                existing = existing_entries_by_year[year]
+                # Only add if we have new entries that might overlap
+                if year in entries_by_year:
+                    # Filter out entries we just added (by checking PR numbers)
+                    new_pr_numbers = {e.pr_number for e in entries_by_year[year] if e.pr_number}
+                    for block in re.split(r'\n(?=> ### 📅)', existing):
+                        block = block.strip()
+                        if not block:
+                            continue
+                        # Check if this entry's PR is in our new entries
+                        pr_match = re.search(r'#(\d+)', block)
+                        if pr_match and pr_match.group(1) in new_pr_numbers:
+                            continue  # Skip duplicate
+                        content_lines.append(block)
+                        content_lines.append("")
+                else:
+                    content_lines.append(existing)
+                    content_lines.append("")
 
-            # Add empty line before summary bullets
-            if entry.summary:
-                new_entries_content.append(">")
-                for bullet in entry.summary:
-                    new_entries_content.append(f"> • {bullet}  ")
+        content_lines.append("---")
+        content_lines.append(f"*Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*")
+        content_lines.append("")
 
-            # Add commit hash at the end
-            commit_link = (
-                f"{self.github_repo_url}/commit/{entry.commit_hash}"
-                if self.github_repo_url
-                else None
-            )
-            if commit_link:
-                new_entries_content.append(f"> [{entry.short_hash}]({commit_link})")
-            else:
-                new_entries_content.append(f"> [{entry.short_hash}]")
-
-            new_entries_content.append("")  # Empty line between cards
-
-        # Build final content
-        if existing_content:
-            # Replace the [Unreleased] section with merged entries
-            new_entries_text = "\n".join(new_entries_content)
-
-            # Combine new entries with existing entries
-            combined_entries = new_entries_text
-            if existing_entries_section:
-                combined_entries = new_entries_text + "\n" + existing_entries_section
-
-            # Replace the [Unreleased] section
-            final_content = re.sub(
-                r"(## \[Unreleased\]\s*\n)(.*?)(?=\n##|\n---|$)",
-                r"\1" + combined_entries + "\n\n",
-                existing_content,
-                flags=re.DOTALL
-            )
-
-            # Update the generation timestamp at the bottom
-            final_content = re.sub(
-                r"\*Generated on .*?\*",
-                f"*Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*",
-                final_content
-            )
-
-            return final_content
-        else:
-            # No existing file, create from scratch
-            content = ["# Changelog\n"]
-            content.append("## [Unreleased]\n")
-            content.extend(new_entries_content)
-            content.append("")
-            content.append("---")
-            content.append(f"*Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*")
-            content.append("")
-            return "\n".join(content)
+        return "\n".join(content_lines)
 
     def write_changelog(self, content: str) -> None:
         """Write the changelog to file."""
