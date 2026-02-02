@@ -501,7 +501,8 @@ Guidelines:
 - Start each bullet with "•"
 - Keep each point under 40 words
 - Prioritise reasoning and impact over technical details
-- If the commit message or PR explains the motivation, capture that"""
+- If the commit message or PR explains the motivation, capture that
+- Output ONLY bullet points - no preamble, introduction, or summary text"""
 
         try:
             if not self.dry_run:
