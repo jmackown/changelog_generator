@@ -146,7 +146,10 @@ jobs:
           PR_BRANCH=$(gh pr view ${{ inputs.pr-number }} --json headRefName -q '.headRefName')
           git config user.name "changelog-bot"
           git config user.email "changelog-bot@users.noreply.github.com"
-          git add CHANGELOG.md .changelog-summaries.json
+          git add CHANGELOG.md
+          if [[ -f .changelog-summaries.json ]]; then
+            git add .changelog-summaries.json
+          fi
           git commit -m "docs: add changelog entry for PR #${{ inputs.pr-number }} [skip ci]"
           git push origin "$PR_BRANCH"
         env:
@@ -157,7 +160,10 @@ jobs:
         run: |
           git config user.name "changelog-bot"
           git config user.email "changelog-bot@users.noreply.github.com"
-          git add CHANGELOG.md .changelog-summaries.json
+          git add CHANGELOG.md
+          if [[ -f .changelog-summaries.json ]]; then
+            git add .changelog-summaries.json
+          fi
           git commit -m "docs: update changelog [skip ci]"
           git push
 
