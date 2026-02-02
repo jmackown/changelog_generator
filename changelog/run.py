@@ -435,6 +435,21 @@ class ChangelogGenerator:
                 print(f"Warning: Could not get file stats for {commit_hash[:7]}: {e}")
             return None
 
+    def get_commit_message(self, commit_hash: str) -> Optional[str]:
+        """Get the full commit message body for a commit."""
+        try:
+            cmd = ["git", "log", "--format=%B", "-n1", commit_hash]
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True,
+                cwd=self.repo_root,
+            )
+            return result.stdout.strip()
+        except subprocess.CalledProcessError:
+            return None
+
     def get_llm_summary(
         self, commit_hash: str, pr_number: str, title: str
     ) -> Optional[List[str]]:
@@ -454,14 +469,17 @@ class ChangelogGenerator:
         # Get PR context
         pr_body = self.get_pr_body(pr_number) if pr_number else None
         file_stats = self.get_file_stats(commit_hash)
+        commit_message = self.get_commit_message(commit_hash)
 
-        if not pr_body and not file_stats:
+        if not pr_body and not file_stats and not commit_message:
             return None
 
         # Construct context for LLM
         context_parts = [f"PR Title: {title}"]
         if pr_body and len(pr_body) > 0:
             context_parts.append(f"PR Description:\n{pr_body[:self.context_limit]}")
+        if commit_message:
+            context_parts.append(f"Commit Message:\n{commit_message[:1000]}")
         if file_stats:
             context_parts.append(f"Files Changed:\n{file_stats}")
         context = "\n\n".join(context_parts)
@@ -470,11 +488,20 @@ class ChangelogGenerator:
         if self._custom_prompt:
             prompt = self._custom_prompt.replace("{context}", context)
         else:
-            prompt = f"""Please analyze this pull request and provide 2-4 concise bullet points summarizing what was changed and why. Focus on the functional changes and their purpose, not technical implementation details.
+            prompt = f"""Analyze this pull request and provide 2-4 bullet points for a changelog entry.
+
+Focus on:
+- WHY this change was made (the problem or need it addresses)
+- The IMPACT for developers and/or end users
+- Any important DECISIONS or trade-offs made
 
 {context}
 
-Please respond with only bullet points, starting each with "•". Keep each point under 25 words."""
+Guidelines:
+- Start each bullet with "•"
+- Keep each point under 40 words
+- Prioritise reasoning and impact over technical details
+- If the commit message or PR explains the motivation, capture that"""
 
         try:
             if not self.dry_run:
