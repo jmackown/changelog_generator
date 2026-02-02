@@ -732,19 +732,31 @@ Please respond with only bullet points, starting each with "•". Keep each poin
             print(f"Changelog written to {changelog_path}")
 
     def _generate(self, commits: List[str], empty_msg: str) -> None:
-        """Process commits and generate changelog."""
+        """Process commits and generate changelog, writing incrementally."""
         if not commits or commits == [""]:
             print(empty_msg)
             return
 
         print(f"Found {len(commits)} commits to process.")
-        entries = [e for c in commits if c and (e := self.parse_commit(c))]
+        entries = []
+
+        for i, commit_hash in enumerate(commits):
+            if not commit_hash:
+                continue
+            entry = self.parse_commit(commit_hash)
+            if entry:
+                entries.append(entry)
+                # Write incrementally after each entry so progress is saved
+                if not self.dry_run:
+                    print(f"  Writing changelog ({len(entries)} entries so far)...")
+                    self.write_changelog(self.generate_changelog_content(entries))
 
         if not entries:
             print("No PR entries found.")
             return
 
         print(f"Processed {len(entries)} changelog entries.")
+        # Final write (or only write in dry-run mode)
         self.write_changelog(self.generate_changelog_content(entries))
 
     def generate_from_date(self, since_date: str) -> None:

@@ -85,7 +85,7 @@ jobs:
       - name: Checkout changelog_generator for changelog script
         uses: actions/checkout@v4
         with:
-          repository: ${{ github.repository_owner }}/changelog_generator
+          repository: jmackown/changelog_generator
           path: .changelog_generator
           sparse-checkout: |
             changelog/run.py
