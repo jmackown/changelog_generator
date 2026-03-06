@@ -107,12 +107,14 @@ class ChangelogGenerator:
     def __init__(
         self,
         dry_run: bool = True,
+        fragment: bool = False,
         with_summaries: bool = False,
         model: Optional[str] = None,
         provider: Optional[str] = None,
         context_limit: int = 3000,
     ):
         self.dry_run = dry_run
+        self.fragment = fragment
         self.with_summaries = with_summaries
         self.context_limit = context_limit
 
@@ -381,7 +383,10 @@ class ChangelogGenerator:
 
         entry = self.create_entry_for_pr(pr_number)
         if entry:
-            self.write_changelog(self.generate_changelog_content([entry]))
+            if self.fragment:
+                self.write_fragment(entry)
+            else:
+                self.write_changelog(self.generate_changelog_content([entry]))
         else:
             print(f"Could not create entry for PR #{pr_number}")
 
@@ -759,6 +764,122 @@ Guidelines:
                 f.write(content)
             print(f"Changelog written to {changelog_path}")
 
+    def write_fragment(self, entry: ChangeEntry) -> None:
+        """Write a single entry as a fragment file in .changelog/."""
+        fragment_dir = self.repo_root / ".changelog"
+        fragment_path = fragment_dir / f"pr-{entry.pr_number}.md"
+        content = "\n".join(self._format_entry(entry))
+
+        if self.dry_run:
+            print(f"\n{'='*60}")
+            print(f"DRY RUN - Would write to {fragment_path}:")
+            print(f"{'='*60}")
+            print(content)
+        else:
+            fragment_dir.mkdir(exist_ok=True)
+            with open(fragment_path, "w") as f:
+                f.write(content)
+            print(f"Fragment written to {fragment_path}")
+
+    def assemble_fragments(self) -> None:
+        """Read all fragment files, merge into CHANGELOG.md, and delete fragments."""
+        fragment_dir = self.repo_root / ".changelog"
+        if not fragment_dir.exists():
+            print("No .changelog directory found, nothing to assemble.")
+            return
+
+        fragment_files = sorted(fragment_dir.glob("pr-*.md"))
+        if not fragment_files:
+            print("No fragment files found, nothing to assemble.")
+            return
+
+        print(f"Found {len(fragment_files)} fragment(s) to assemble.")
+
+        # Read all fragment contents
+        fragment_contents = []
+        for fpath in fragment_files:
+            fragment_contents.append(fpath.read_text().strip())
+
+        # Parse dates from fragment contents to slot into year sections
+        entries_by_year: dict[int, list[str]] = {}
+        for content in fragment_contents:
+            date_match = re.search(r"📅 (\d{4})-(\d{2})-(\d{2})", content)
+            if date_match:
+                year = int(date_match.group(1))
+            else:
+                year = datetime.now().year
+            if year not in entries_by_year:
+                entries_by_year[year] = []
+            entries_by_year[year].append(content)
+
+        # Read existing CHANGELOG.md
+        changelog_path = self.repo_root / "CHANGELOG.md"
+        existing_entries_by_year: dict[int, str] = {}
+
+        if changelog_path.exists():
+            existing_content = changelog_path.read_text()
+            # Strip out footer
+            existing_content = re.sub(r'\n---\n\*Generated on.*?\*\n?', '', existing_content)
+            # Extract existing entries for each year section
+            year_pattern = r"## (\d{4})\s*\n(.*?)(?=\n## \d{4}|\Z)"
+            for match in re.finditer(year_pattern, existing_content, re.DOTALL):
+                year = int(match.group(1))
+                content = match.group(2).strip()
+                if content:
+                    existing_entries_by_year[year] = content
+
+        # Build merged content
+        all_years = sorted(
+            set(entries_by_year.keys()) | set(existing_entries_by_year.keys()),
+            reverse=True,
+        )
+
+        content_lines = ["# Changelog\n"]
+
+        for year in all_years:
+            content_lines.append(f"## {year}\n")
+
+            # New fragments for this year (newest first by date)
+            if year in entries_by_year:
+                def _extract_date(c: str) -> str:
+                    m = re.search(r"📅 (\d{4}-\d{2}-\d{2})", c)
+                    return m.group(1) if m else ""
+
+                year_fragments = sorted(
+                    entries_by_year[year],
+                    key=_extract_date,
+                    reverse=True,
+                )
+                for frag in year_fragments:
+                    content_lines.append(frag)
+                    content_lines.append("")
+
+            # Existing entries for this year
+            if year in existing_entries_by_year:
+                content_lines.append(existing_entries_by_year[year])
+                content_lines.append("")
+
+        content_lines.append("---")
+        content_lines.append(f"*Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*")
+        content_lines.append("")
+
+        final_content = "\n".join(content_lines)
+
+        if self.dry_run:
+            print(f"\n{'='*60}")
+            print("DRY RUN - Would write to CHANGELOG.md:")
+            print(f"{'='*60}")
+            print(final_content)
+        else:
+            with open(changelog_path, "w") as f:
+                f.write(final_content)
+            print(f"Changelog written to {changelog_path}")
+
+            # Delete consumed fragments
+            for fpath in fragment_files:
+                fpath.unlink()
+                print(f"Deleted {fpath}")
+
     def _generate(self, commits: List[str], empty_msg: str) -> None:
         """Process commits and generate changelog, writing incrementally."""
         if not commits or commits == [""]:
@@ -870,6 +991,18 @@ Examples:
     )
 
     parser.add_argument(
+        "--fragment",
+        action="store_true",
+        help="Write changelog entry as a fragment file in .changelog/ (use with --for-pr)",
+    )
+
+    parser.add_argument(
+        "--assemble",
+        action="store_true",
+        help="Assemble fragment files from .changelog/ into CHANGELOG.md",
+    )
+
+    parser.add_argument(
         "--for-pr",
         type=str,
         metavar="NUMBER",
@@ -906,18 +1039,24 @@ Examples:
 
     args = parser.parse_args()
 
+    if args.fragment and not args.for_pr:
+        parser.error("--fragment requires --for-pr")
+
     if args.dry_run:
         print("DRY RUN MODE: No files will be modified")
 
     generator = ChangelogGenerator(
         dry_run=args.dry_run,
+        fragment=args.fragment,
         with_summaries=args.with_summaries,
         model=args.model,
         provider=args.provider,
         context_limit=args.context_limit,
     )
 
-    if args.for_pr:
+    if args.assemble:
+        generator.assemble_fragments()
+    elif args.for_pr:
         generator.generate_for_pr(args.for_pr)
     elif args.from_date:
         generator.generate_from_date(args.from_date)

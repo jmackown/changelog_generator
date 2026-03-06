@@ -445,3 +445,255 @@ class TestMergeWithExisting:
         # Old timestamp should be replaced
         assert "2025-01-01 00:00:00" not in content
         assert "*Generated on" in content
+
+
+class TestFragmentMode:
+    """Test fragment file generation."""
+
+    @pytest.fixture
+    def generator(self, tmp_path):
+        """Create generator with temp directory and fragment mode."""
+        with patch.object(ChangelogGenerator, '_get_github_repo_url', return_value="https://github.com/test/repo"):
+            with patch.object(ChangelogGenerator, '_load_cache', return_value={}):
+                gen = ChangelogGenerator(dry_run=False, fragment=True)
+                gen.repo_root = tmp_path
+                return gen
+
+    def test_fragment_writes_to_changelog_dir(self, generator, tmp_path):
+        """--fragment --for-pr writes to .changelog/pr-{N}.md instead of CHANGELOG.md."""
+        entry = ChangeEntry(
+            commit_hash="abc123def456789",
+            short_hash="abc123d",
+            title="feat: add login",
+            pr_number="42",
+            jira_ticket=None,
+            date=datetime(2025, 1, 15),
+            author="dev",
+            approver="reviewer",
+            workflow_run_number=None,
+            workflow_run_url=None,
+            summary=None,
+        )
+        generator.write_fragment(entry)
+
+        fragment_path = tmp_path / ".changelog" / "pr-42.md"
+        assert fragment_path.exists()
+        content = fragment_path.read_text()
+        assert "> ### 📅 2025-01-15" in content
+        assert "feat: add login" in content
+        assert "[#42]" in content
+
+    def test_fragment_does_not_write_changelog(self, generator, tmp_path):
+        """Fragment mode should not create or modify CHANGELOG.md."""
+        entry = ChangeEntry(
+            commit_hash="abc123def456789",
+            short_hash="abc123d",
+            title="feat: add login",
+            pr_number="42",
+            jira_ticket=None,
+            date=datetime(2025, 1, 15),
+            author="dev",
+            approver="reviewer",
+            workflow_run_number=None,
+            workflow_run_url=None,
+            summary=None,
+        )
+        generator.write_fragment(entry)
+
+        changelog_path = tmp_path / "CHANGELOG.md"
+        assert not changelog_path.exists()
+
+    def test_fragment_creates_changelog_dir(self, generator, tmp_path):
+        """Fragment mode creates .changelog directory if it doesn't exist."""
+        entry = ChangeEntry(
+            commit_hash="abc123def456789",
+            short_hash="abc123d",
+            title="feat: test",
+            pr_number="99",
+            jira_ticket=None,
+            date=datetime(2025, 1, 15),
+            author=None,
+            approver=None,
+            workflow_run_number=None,
+            workflow_run_url=None,
+            summary=None,
+        )
+        generator.write_fragment(entry)
+
+        assert (tmp_path / ".changelog").is_dir()
+
+    def test_fragment_contains_formatted_card(self, generator, tmp_path):
+        """Fragment content matches _format_entry output."""
+        entry = ChangeEntry(
+            commit_hash="abc123def456789",
+            short_hash="abc123d",
+            title="feat: add login",
+            pr_number="42",
+            jira_ticket="PROJ-123",
+            date=datetime(2025, 1, 15),
+            author="dev",
+            approver="reviewer",
+            workflow_run_number=None,
+            workflow_run_url=None,
+            summary=["Added login feature", "Updated auth flow"],
+        )
+        generator.write_fragment(entry)
+
+        fragment_path = tmp_path / ".changelog" / "pr-42.md"
+        content = fragment_path.read_text()
+
+        assert "**Author:** @dev" in content
+        assert "**Approved:** @reviewer" in content
+        assert "**Ticket:** PROJ-123" in content
+        assert "> • Added login feature" in content
+        assert "> • Updated auth flow" in content
+
+    def test_fragment_dry_run_does_not_write(self, tmp_path):
+        """Dry-run fragment mode should not write any files."""
+        with patch.object(ChangelogGenerator, '_get_github_repo_url', return_value="https://github.com/test/repo"):
+            with patch.object(ChangelogGenerator, '_load_cache', return_value={}):
+                gen = ChangelogGenerator(dry_run=True, fragment=True)
+                gen.repo_root = tmp_path
+
+        entry = ChangeEntry(
+            commit_hash="abc123def456789",
+            short_hash="abc123d",
+            title="feat: test",
+            pr_number="42",
+            jira_ticket=None,
+            date=datetime(2025, 1, 15),
+            author=None,
+            approver=None,
+            workflow_run_number=None,
+            workflow_run_url=None,
+            summary=None,
+        )
+        gen.write_fragment(entry)
+
+        assert not (tmp_path / ".changelog").exists()
+
+    def test_generate_for_pr_uses_write_fragment(self, generator):
+        """generate_for_pr dispatches to write_fragment when fragment=True."""
+        mock_entry = ChangeEntry(
+            commit_hash="abc123def456789",
+            short_hash="abc123d",
+            title="feat: test",
+            pr_number="42",
+            jira_ticket=None,
+            date=datetime(2025, 1, 15),
+            author=None,
+            approver=None,
+            workflow_run_number=None,
+            workflow_run_url=None,
+            summary=None,
+        )
+        with patch.object(generator, 'create_entry_for_pr', return_value=mock_entry):
+            with patch.object(generator, 'write_fragment') as mock_write_fragment:
+                with patch.object(generator, 'write_changelog') as mock_write_changelog:
+                    generator.generate_for_pr("42")
+
+                    mock_write_fragment.assert_called_once_with(mock_entry)
+                    mock_write_changelog.assert_not_called()
+
+
+class TestAssembleFragments:
+    """Test fragment assembly into CHANGELOG.md."""
+
+    @pytest.fixture
+    def generator(self, tmp_path):
+        """Create generator with temp directory."""
+        with patch.object(ChangelogGenerator, '_get_github_repo_url', return_value="https://github.com/test/repo"):
+            with patch.object(ChangelogGenerator, '_load_cache', return_value={}):
+                gen = ChangelogGenerator(dry_run=False)
+                gen.repo_root = tmp_path
+                return gen
+
+    def _write_fragment(self, tmp_path, pr_number, content):
+        """Helper to write a fragment file."""
+        fragment_dir = tmp_path / ".changelog"
+        fragment_dir.mkdir(exist_ok=True)
+        (fragment_dir / f"pr-{pr_number}.md").write_text(content)
+
+    def test_assemble_single_fragment(self, generator, tmp_path):
+        """Single fragment is assembled into CHANGELOG.md."""
+        fragment_content = (
+            "> ### 📅 2025-01-15 | feat: add login ([#42](https://github.com/test/repo/pull/42))\n"
+            "> **Author:** @dev\n"
+            "> [abc123d](https://github.com/test/repo/commit/abc123def456789)\n"
+        )
+        self._write_fragment(tmp_path, "42", fragment_content)
+
+        generator.assemble_fragments()
+
+        changelog = (tmp_path / "CHANGELOG.md").read_text()
+        assert "# Changelog" in changelog
+        assert "feat: add login" in changelog
+        assert "## 2025" in changelog
+
+    def test_assemble_deletes_fragments(self, generator, tmp_path):
+        """Assembled fragments are deleted."""
+        fragment_content = (
+            "> ### 📅 2025-01-15 | feat: test ([#1](https://github.com/test/repo/pull/1))\n"
+            "> [abc123d](https://github.com/test/repo/commit/abc123d)\n"
+        )
+        self._write_fragment(tmp_path, "1", fragment_content)
+
+        generator.assemble_fragments()
+
+        assert not (tmp_path / ".changelog" / "pr-1.md").exists()
+
+    def test_assemble_merges_with_existing_changelog(self, generator, tmp_path):
+        """Fragments merge with existing CHANGELOG.md content."""
+        existing = (
+            "# Changelog\n\n"
+            "## 2025\n\n"
+            "> ### 📅 2025-01-10 | old entry ([#1](https://github.com/test/repo/pull/1))\n"
+            "> [old123](https://github.com/test/repo/commit/old123)\n\n"
+            "---\n"
+            "*Generated on 2025-01-10 10:00:00*\n"
+        )
+        (tmp_path / "CHANGELOG.md").write_text(existing)
+
+        fragment_content = (
+            "> ### 📅 2025-01-20 | new entry ([#2](https://github.com/test/repo/pull/2))\n"
+            "> [new456](https://github.com/test/repo/commit/new456)\n"
+        )
+        self._write_fragment(tmp_path, "2", fragment_content)
+
+        generator.assemble_fragments()
+
+        changelog = (tmp_path / "CHANGELOG.md").read_text()
+        assert "old entry" in changelog
+        assert "new entry" in changelog
+
+    def test_assemble_multiple_fragments(self, generator, tmp_path):
+        """Multiple fragments are all assembled."""
+        for pr_num, title in [("10", "feat: first"), ("20", "feat: second")]:
+            content = (
+                f"> ### 📅 2025-01-15 | {title} ([#{pr_num}](https://github.com/test/repo/pull/{pr_num}))\n"
+                f"> [hash{pr_num}](https://github.com/test/repo/commit/hash{pr_num})\n"
+            )
+            self._write_fragment(tmp_path, pr_num, content)
+
+        generator.assemble_fragments()
+
+        changelog = (tmp_path / "CHANGELOG.md").read_text()
+        assert "feat: first" in changelog
+        assert "feat: second" in changelog
+        assert not (tmp_path / ".changelog" / "pr-10.md").exists()
+        assert not (tmp_path / ".changelog" / "pr-20.md").exists()
+
+    def test_assemble_no_fragments_is_noop(self, generator, tmp_path):
+        """No fragments means no changes."""
+        generator.assemble_fragments()
+
+        assert not (tmp_path / "CHANGELOG.md").exists()
+
+    def test_assemble_no_fragments_preserves_existing(self, generator, tmp_path):
+        """No fragments doesn't touch existing CHANGELOG.md."""
+        existing = "# Changelog\n\n## 2025\n\nsome content\n"
+        (tmp_path / "CHANGELOG.md").write_text(existing)
+
+        generator.assemble_fragments()
+
+        assert (tmp_path / "CHANGELOG.md").read_text() == existing
