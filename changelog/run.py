@@ -841,10 +841,13 @@ Guidelines:
 
             # New fragments for this year (newest first by date)
             if year in entries_by_year:
+                def _extract_date(c: str) -> str:
+                    m = re.search(r"📅 (\d{4}-\d{2}-\d{2})", c)
+                    return m.group(1) if m else ""
+
                 year_fragments = sorted(
                     entries_by_year[year],
-                    key=lambda c: re.search(r"📅 (\d{4}-\d{2}-\d{2})", c).group(1)
-                    if re.search(r"📅 (\d{4}-\d{2}-\d{2})", c) else "",
+                    key=_extract_date,
                     reverse=True,
                 )
                 for frag in year_fragments:
