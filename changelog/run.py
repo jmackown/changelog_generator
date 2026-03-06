@@ -781,6 +781,102 @@ Guidelines:
                 f.write(content)
             print(f"Fragment written to {fragment_path}")
 
+    def assemble_fragments(self) -> None:
+        """Read all fragment files, merge into CHANGELOG.md, and delete fragments."""
+        fragment_dir = self.repo_root / ".changelog"
+        if not fragment_dir.exists():
+            print("No .changelog directory found, nothing to assemble.")
+            return
+
+        fragment_files = sorted(fragment_dir.glob("pr-*.md"))
+        if not fragment_files:
+            print("No fragment files found, nothing to assemble.")
+            return
+
+        print(f"Found {len(fragment_files)} fragment(s) to assemble.")
+
+        # Read all fragment contents
+        fragment_contents = []
+        for fpath in fragment_files:
+            fragment_contents.append(fpath.read_text().strip())
+
+        # Parse dates from fragment contents to slot into year sections
+        entries_by_year: dict[int, list[str]] = {}
+        for content in fragment_contents:
+            date_match = re.search(r"📅 (\d{4})-(\d{2})-(\d{2})", content)
+            if date_match:
+                year = int(date_match.group(1))
+            else:
+                year = datetime.now().year
+            if year not in entries_by_year:
+                entries_by_year[year] = []
+            entries_by_year[year].append(content)
+
+        # Read existing CHANGELOG.md
+        changelog_path = self.repo_root / "CHANGELOG.md"
+        existing_entries_by_year: dict[int, str] = {}
+
+        if changelog_path.exists():
+            existing_content = changelog_path.read_text()
+            # Strip out footer
+            existing_content = re.sub(r'\n---\n\*Generated on.*?\*\n?', '', existing_content)
+            # Extract existing entries for each year section
+            year_pattern = r"## (\d{4})\s*\n(.*?)(?=\n## \d{4}|\Z)"
+            for match in re.finditer(year_pattern, existing_content, re.DOTALL):
+                year = int(match.group(1))
+                content = match.group(2).strip()
+                if content:
+                    existing_entries_by_year[year] = content
+
+        # Build merged content
+        all_years = sorted(
+            set(entries_by_year.keys()) | set(existing_entries_by_year.keys()),
+            reverse=True,
+        )
+
+        content_lines = ["# Changelog\n"]
+
+        for year in all_years:
+            content_lines.append(f"## {year}\n")
+
+            # New fragments for this year (newest first by date)
+            if year in entries_by_year:
+                year_fragments = sorted(
+                    entries_by_year[year],
+                    key=lambda c: re.search(r"📅 (\d{4}-\d{2}-\d{2})", c).group(1)
+                    if re.search(r"📅 (\d{4}-\d{2}-\d{2})", c) else "",
+                    reverse=True,
+                )
+                for frag in year_fragments:
+                    content_lines.append(frag)
+                    content_lines.append("")
+
+            # Existing entries for this year
+            if year in existing_entries_by_year:
+                content_lines.append(existing_entries_by_year[year])
+                content_lines.append("")
+
+        content_lines.append("---")
+        content_lines.append(f"*Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*")
+        content_lines.append("")
+
+        final_content = "\n".join(content_lines)
+
+        if self.dry_run:
+            print(f"\n{'='*60}")
+            print("DRY RUN - Would write to CHANGELOG.md:")
+            print(f"{'='*60}")
+            print(final_content)
+        else:
+            with open(changelog_path, "w") as f:
+                f.write(final_content)
+            print(f"Changelog written to {changelog_path}")
+
+            # Delete consumed fragments
+            for fpath in fragment_files:
+                fpath.unlink()
+                print(f"Deleted {fpath}")
+
     def _generate(self, commits: List[str], empty_msg: str) -> None:
         """Process commits and generate changelog, writing incrementally."""
         if not commits or commits == [""]:
@@ -898,6 +994,12 @@ Examples:
     )
 
     parser.add_argument(
+        "--assemble",
+        action="store_true",
+        help="Assemble fragment files from .changelog/ into CHANGELOG.md",
+    )
+
+    parser.add_argument(
         "--for-pr",
         type=str,
         metavar="NUMBER",
@@ -949,7 +1051,9 @@ Examples:
         context_limit=args.context_limit,
     )
 
-    if args.for_pr:
+    if args.assemble:
+        generator.assemble_fragments()
+    elif args.for_pr:
         generator.generate_for_pr(args.for_pr)
     elif args.from_date:
         generator.generate_from_date(args.from_date)

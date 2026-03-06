@@ -594,3 +594,106 @@ class TestFragmentMode:
 
                     mock_write_fragment.assert_called_once_with(mock_entry)
                     mock_write_changelog.assert_not_called()
+
+
+class TestAssembleFragments:
+    """Test fragment assembly into CHANGELOG.md."""
+
+    @pytest.fixture
+    def generator(self, tmp_path):
+        """Create generator with temp directory."""
+        with patch.object(ChangelogGenerator, '_get_github_repo_url', return_value="https://github.com/test/repo"):
+            with patch.object(ChangelogGenerator, '_load_cache', return_value={}):
+                gen = ChangelogGenerator(dry_run=False)
+                gen.repo_root = tmp_path
+                return gen
+
+    def _write_fragment(self, tmp_path, pr_number, content):
+        """Helper to write a fragment file."""
+        fragment_dir = tmp_path / ".changelog"
+        fragment_dir.mkdir(exist_ok=True)
+        (fragment_dir / f"pr-{pr_number}.md").write_text(content)
+
+    def test_assemble_single_fragment(self, generator, tmp_path):
+        """Single fragment is assembled into CHANGELOG.md."""
+        fragment_content = (
+            "> ### 📅 2025-01-15 | feat: add login ([#42](https://github.com/test/repo/pull/42))\n"
+            "> **Author:** @dev\n"
+            "> [abc123d](https://github.com/test/repo/commit/abc123def456789)\n"
+        )
+        self._write_fragment(tmp_path, "42", fragment_content)
+
+        generator.assemble_fragments()
+
+        changelog = (tmp_path / "CHANGELOG.md").read_text()
+        assert "# Changelog" in changelog
+        assert "feat: add login" in changelog
+        assert "## 2025" in changelog
+
+    def test_assemble_deletes_fragments(self, generator, tmp_path):
+        """Assembled fragments are deleted."""
+        fragment_content = (
+            "> ### 📅 2025-01-15 | feat: test ([#1](https://github.com/test/repo/pull/1))\n"
+            "> [abc123d](https://github.com/test/repo/commit/abc123d)\n"
+        )
+        self._write_fragment(tmp_path, "1", fragment_content)
+
+        generator.assemble_fragments()
+
+        assert not (tmp_path / ".changelog" / "pr-1.md").exists()
+
+    def test_assemble_merges_with_existing_changelog(self, generator, tmp_path):
+        """Fragments merge with existing CHANGELOG.md content."""
+        existing = (
+            "# Changelog\n\n"
+            "## 2025\n\n"
+            "> ### 📅 2025-01-10 | old entry ([#1](https://github.com/test/repo/pull/1))\n"
+            "> [old123](https://github.com/test/repo/commit/old123)\n\n"
+            "---\n"
+            "*Generated on 2025-01-10 10:00:00*\n"
+        )
+        (tmp_path / "CHANGELOG.md").write_text(existing)
+
+        fragment_content = (
+            "> ### 📅 2025-01-20 | new entry ([#2](https://github.com/test/repo/pull/2))\n"
+            "> [new456](https://github.com/test/repo/commit/new456)\n"
+        )
+        self._write_fragment(tmp_path, "2", fragment_content)
+
+        generator.assemble_fragments()
+
+        changelog = (tmp_path / "CHANGELOG.md").read_text()
+        assert "old entry" in changelog
+        assert "new entry" in changelog
+
+    def test_assemble_multiple_fragments(self, generator, tmp_path):
+        """Multiple fragments are all assembled."""
+        for pr_num, title in [("10", "feat: first"), ("20", "feat: second")]:
+            content = (
+                f"> ### 📅 2025-01-15 | {title} ([#{pr_num}](https://github.com/test/repo/pull/{pr_num}))\n"
+                f"> [hash{pr_num}](https://github.com/test/repo/commit/hash{pr_num})\n"
+            )
+            self._write_fragment(tmp_path, pr_num, content)
+
+        generator.assemble_fragments()
+
+        changelog = (tmp_path / "CHANGELOG.md").read_text()
+        assert "feat: first" in changelog
+        assert "feat: second" in changelog
+        assert not (tmp_path / ".changelog" / "pr-10.md").exists()
+        assert not (tmp_path / ".changelog" / "pr-20.md").exists()
+
+    def test_assemble_no_fragments_is_noop(self, generator, tmp_path):
+        """No fragments means no changes."""
+        generator.assemble_fragments()
+
+        assert not (tmp_path / "CHANGELOG.md").exists()
+
+    def test_assemble_no_fragments_preserves_existing(self, generator, tmp_path):
+        """No fragments doesn't touch existing CHANGELOG.md."""
+        existing = "# Changelog\n\n## 2025\n\nsome content\n"
+        (tmp_path / "CHANGELOG.md").write_text(existing)
+
+        generator.assemble_fragments()
+
+        assert (tmp_path / "CHANGELOG.md").read_text() == existing
