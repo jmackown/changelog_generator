@@ -547,3 +547,50 @@ class TestFragmentMode:
         assert "**Ticket:** PROJ-123" in content
         assert "> • Added login feature" in content
         assert "> • Updated auth flow" in content
+
+    def test_fragment_dry_run_does_not_write(self, tmp_path):
+        """Dry-run fragment mode should not write any files."""
+        with patch.object(ChangelogGenerator, '_get_github_repo_url', return_value="https://github.com/test/repo"):
+            with patch.object(ChangelogGenerator, '_load_cache', return_value={}):
+                gen = ChangelogGenerator(dry_run=True, fragment=True)
+                gen.repo_root = tmp_path
+
+        entry = ChangeEntry(
+            commit_hash="abc123def456789",
+            short_hash="abc123d",
+            title="feat: test",
+            pr_number="42",
+            jira_ticket=None,
+            date=datetime(2025, 1, 15),
+            author=None,
+            approver=None,
+            workflow_run_number=None,
+            workflow_run_url=None,
+            summary=None,
+        )
+        gen.write_fragment(entry)
+
+        assert not (tmp_path / ".changelog").exists()
+
+    def test_generate_for_pr_uses_write_fragment(self, generator):
+        """generate_for_pr dispatches to write_fragment when fragment=True."""
+        mock_entry = ChangeEntry(
+            commit_hash="abc123def456789",
+            short_hash="abc123d",
+            title="feat: test",
+            pr_number="42",
+            jira_ticket=None,
+            date=datetime(2025, 1, 15),
+            author=None,
+            approver=None,
+            workflow_run_number=None,
+            workflow_run_url=None,
+            summary=None,
+        )
+        with patch.object(generator, 'create_entry_for_pr', return_value=mock_entry):
+            with patch.object(generator, 'write_fragment') as mock_write_fragment:
+                with patch.object(generator, 'write_changelog') as mock_write_changelog:
+                    generator.generate_for_pr("42")
+
+                    mock_write_fragment.assert_called_once_with(mock_entry)
+                    mock_write_changelog.assert_not_called()

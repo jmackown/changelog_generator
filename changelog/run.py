@@ -767,8 +767,6 @@ Guidelines:
     def write_fragment(self, entry: ChangeEntry) -> None:
         """Write a single entry as a fragment file in .changelog/."""
         fragment_dir = self.repo_root / ".changelog"
-        fragment_dir.mkdir(exist_ok=True)
-
         fragment_path = fragment_dir / f"pr-{entry.pr_number}.md"
         content = "\n".join(self._format_entry(entry))
 
@@ -778,6 +776,7 @@ Guidelines:
             print(f"{'='*60}")
             print(content)
         else:
+            fragment_dir.mkdir(exist_ok=True)
             with open(fragment_path, "w") as f:
                 f.write(content)
             print(f"Fragment written to {fragment_path}")
@@ -934,6 +933,9 @@ Examples:
     )
 
     args = parser.parse_args()
+
+    if args.fragment and not args.for_pr:
+        parser.error("--fragment requires --for-pr")
 
     if args.dry_run:
         print("DRY RUN MODE: No files will be modified")
