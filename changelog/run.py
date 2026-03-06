@@ -107,12 +107,14 @@ class ChangelogGenerator:
     def __init__(
         self,
         dry_run: bool = True,
+        fragment: bool = False,
         with_summaries: bool = False,
         model: Optional[str] = None,
         provider: Optional[str] = None,
         context_limit: int = 3000,
     ):
         self.dry_run = dry_run
+        self.fragment = fragment
         self.with_summaries = with_summaries
         self.context_limit = context_limit
 
@@ -381,7 +383,10 @@ class ChangelogGenerator:
 
         entry = self.create_entry_for_pr(pr_number)
         if entry:
-            self.write_changelog(self.generate_changelog_content([entry]))
+            if self.fragment:
+                self.write_fragment(entry)
+            else:
+                self.write_changelog(self.generate_changelog_content([entry]))
         else:
             print(f"Could not create entry for PR #{pr_number}")
 
@@ -759,6 +764,24 @@ Guidelines:
                 f.write(content)
             print(f"Changelog written to {changelog_path}")
 
+    def write_fragment(self, entry: ChangeEntry) -> None:
+        """Write a single entry as a fragment file in .changelog/."""
+        fragment_dir = self.repo_root / ".changelog"
+        fragment_dir.mkdir(exist_ok=True)
+
+        fragment_path = fragment_dir / f"pr-{entry.pr_number}.md"
+        content = "\n".join(self._format_entry(entry))
+
+        if self.dry_run:
+            print(f"\n{'='*60}")
+            print(f"DRY RUN - Would write to {fragment_path}:")
+            print(f"{'='*60}")
+            print(content)
+        else:
+            with open(fragment_path, "w") as f:
+                f.write(content)
+            print(f"Fragment written to {fragment_path}")
+
     def _generate(self, commits: List[str], empty_msg: str) -> None:
         """Process commits and generate changelog, writing incrementally."""
         if not commits or commits == [""]:
@@ -870,6 +893,12 @@ Examples:
     )
 
     parser.add_argument(
+        "--fragment",
+        action="store_true",
+        help="Write changelog entry as a fragment file in .changelog/ (use with --for-pr)",
+    )
+
+    parser.add_argument(
         "--for-pr",
         type=str,
         metavar="NUMBER",
@@ -911,6 +940,7 @@ Examples:
 
     generator = ChangelogGenerator(
         dry_run=args.dry_run,
+        fragment=args.fragment,
         with_summaries=args.with_summaries,
         model=args.model,
         provider=args.provider,
