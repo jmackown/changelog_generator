@@ -23,6 +23,12 @@ python changelog/run.py --write --with-summaries
 
 # Incremental update (for CI/CD)
 python changelog/run.py --write --since-last-commit
+
+# Generate a fragment for a PR (on PR branch)
+python changelog/run.py --fragment --for-pr 123
+
+# Assemble fragments into CHANGELOG.md (on merge to main)
+python changelog/run.py --assemble
 ```
 
 ## Architecture
@@ -35,6 +41,7 @@ Single-file Python script (`changelog/run.py`) with one main class:
 - Optionally generates AI summaries via Anthropic or OpenAI APIs
 - Caches summaries in `.changelog-summaries.json` to avoid re-processing
 - Merges new entries with existing CHANGELOG.md content
+- Supports fragment mode: writes individual `.changelog/pr-{N}.md` files per PR, then assembles them into CHANGELOG.md on merge
 
 **`ChangeEntry`** - NamedTuple holding commit metadata (hash, title, PR number, JIRA ticket, author, approver, workflow run, summary)
 
@@ -42,11 +49,15 @@ Single-file Python script (`changelog/run.py`) with one main class:
 
 - **Safe by default**: `--dry-run` is the default mode; `--write` required to modify files
 - **PR-only commits**: Uses `--first-parent` and `--grep=#` to filter to only PR merges on main
-- **Merge with existing**: New entries are prepended to the `[Unreleased]` section, preserving existing content
+- **Merge with existing**: New entries are prepended to year sections, preserving existing content
 - **GitHub CLI dependency**: Requires `gh` CLI for PR metadata (author, approver, workflow runs)
+- **Fragment mode (recommended)**: Each PR gets its own `.changelog/pr-{N}.md` file committed to the PR branch, eliminating merge conflicts. Fragments are assembled into CHANGELOG.md on merge to main via a serialized workflow job.
 
 ## GitHub Actions Integration
 
-The workflow (`.github/workflows/changelog.yml`) is designed as a **reusable workflow** called from other repositories. Supports two modes:
-- `use-pull-request: true` (default) - Creates PR for changelog updates
-- `use-pull-request: false` - Direct commit to main with `[skip ci]`
+The workflow (`.github/workflows/changelog.yml`) is designed as a **reusable workflow** called from other repositories. Supports four modes via the `mode` input:
+
+- `fragment` (default, recommended) - Two-phase: writes fragment on PR branch, assembles on merge to main
+- `direct-commit` - Commits changelog directly to main with `[skip ci]`
+- `pull-request` - Creates a separate PR for changelog updates
+- `update-branch` - Commits changelog to the PR branch before merge
