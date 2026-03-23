@@ -393,12 +393,17 @@ class ChangelogGenerator:
     def get_workflow_run(self, commit_hash: str) -> tuple[Optional[str], Optional[str]]:
         """Get GitHub Actions workflow run number and URL for commit."""
         try:
-            cmd = ["gh", "run", "list", "--json", "headSha,number,url,event"]
+            cmd = [
+                "gh", "run", "list",
+                "--commit", commit_hash,
+                "--json", "number,url,event",
+                "--limit", "10",
+            ]
             result = subprocess.run(cmd, capture_output=True, text=True, check=True)
             runs = json.loads(result.stdout)
 
             for run in runs:
-                if run.get("headSha") == commit_hash and run.get("event") == "push":
+                if run.get("event") == "push":
                     return str(run.get("number")), run.get("url")
 
             return None, None
