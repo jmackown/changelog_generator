@@ -1,16 +1,17 @@
 name: Changelog (this repo)
 
 on:
-  pull_request:
-    types: [opened, synchronize]
   push:
     branches: [main]
 
 jobs:
-  # Generate a fragment on the PR branch
-  generate-fragment:
-    if: github.event_name == 'pull_request'
+  changelog:
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
     runs-on: ubuntu-latest
+    concurrency:
+      group: changelog-update
+      cancel-in-progress: false
+
     permissions:
       contents: write
       pull-requests: read
@@ -19,75 +20,58 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.head_ref }}
+          ref: main
+          fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Extract PR number from merge commit
+        id: pr
+        run: |
+          SUBJECT=$(git log -1 --format='%s')
+          echo "Commit subject: $SUBJECT"
+          PR_NUM=$(echo "$SUBJECT" | grep -oE 'Merge pull request #[0-9]+' | grep -oE '[0-9]+')
+          if [ -z "$PR_NUM" ]; then
+            PR_NUM=$(echo "$SUBJECT" | grep -oE '\(#[0-9]+\)$' | grep -oE '[0-9]+')
+          fi
+          if [ -z "$PR_NUM" ]; then
+            echo "No PR number found, skipping."
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "Found PR #$PR_NUM"
+            echo "number=$PR_NUM" >> $GITHUB_OUTPUT
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Set up Python
+        if: steps.pr.outputs.skip != 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install dependencies
+        if: steps.pr.outputs.skip != 'true'
         run: pip install requests
 
-      - name: Generate fragment
+      - name: Generate changelog entry
+        if: steps.pr.outputs.skip != 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           python changelog/run.py \
-            --fragment \
-            --for-pr ${{ github.event.pull_request.number }} \
+            --for-pr ${{ steps.pr.outputs.number }} \
             --with-summaries
 
-      - name: Commit fragment
+      - name: Commit changelog
+        if: steps.pr.outputs.skip != 'true'
         run: |
           git config user.name "changelog-bot"
           git config user.email "changelog-bot@users.noreply.github.com"
-          git add .changelog/
+          git pull --rebase origin main
+          git add CHANGELOG.md
           if git diff --cached --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "docs: add changelog fragment for PR #${{ github.event.pull_request.number }}"
-            git push
-          fi
-
-  # Assemble fragments on merge to main
-  assemble-changelog:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    concurrency:
-      group: changelog-assemble
-      cancel-in-progress: false
-    permissions:
-      contents: write
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: pip install requests
-
-      - name: Assemble changelog
-        run: python changelog/run.py --assemble
-
-      - name: Commit assembled changelog
-        run: |
-          git config user.name "changelog-bot"
-          git config user.email "changelog-bot@users.noreply.github.com"
-          git add CHANGELOG.md .changelog/
-          if git diff --cached --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "docs: update changelog [skip ci]"
+            git commit -m "docs: update changelog for PR #${{ steps.pr.outputs.number }} [skip ci]"
             git push
           fi

@@ -24,11 +24,8 @@ python changelog/run.py --write --with-summaries
 # Incremental update (for CI/CD)
 python changelog/run.py --write --since-last-commit
 
-# Generate a fragment for a PR (on PR branch)
-python changelog/run.py --fragment --for-pr 123
-
-# Assemble fragments into CHANGELOG.md (on merge to main)
-python changelog/run.py --assemble
+# Generate entry for a specific PR
+python changelog/run.py --for-pr 123
 ```
 
 ## Architecture
@@ -41,7 +38,6 @@ Single-file Python script (`changelog/run.py`) with one main class:
 - Optionally generates AI summaries via Anthropic or OpenAI APIs
 - Caches summaries in `.changelog-summaries.json` to avoid re-processing
 - Merges new entries with existing CHANGELOG.md content
-- Supports fragment mode: writes individual `.changelog/pr-{N}.md` files per PR, then assembles them into CHANGELOG.md on merge
 
 **`ChangeEntry`** - NamedTuple holding commit metadata (hash, title, PR number, JIRA ticket, author, approver, workflow run, summary)
 
@@ -51,13 +47,8 @@ Single-file Python script (`changelog/run.py`) with one main class:
 - **PR-only commits**: Uses `--first-parent` and `--grep=#` to filter to only PR merges on main
 - **Merge with existing**: New entries are prepended to year sections, preserving existing content
 - **GitHub CLI dependency**: Requires `gh` CLI for PR metadata (author, approver, workflow runs)
-- **Fragment mode (recommended)**: Each PR gets its own `.changelog/pr-{N}.md` file committed to the PR branch, eliminating merge conflicts. Fragments are assembled into CHANGELOG.md on merge to main via a serialized workflow job.
+- **On-merge workflow**: When a PR merges to main, the workflow extracts the PR number from the merge commit, generates a changelog entry with metadata and optional AI summary, and commits directly to CHANGELOG.md. Concurrent merges are serialised via GitHub Actions concurrency groups.
 
 ## GitHub Actions Integration
 
-The workflow (`.github/workflows/changelog.yml`) is designed as a **reusable workflow** called from other repositories. Supports four modes via the `mode` input:
-
-- `fragment` (default, recommended) - Two-phase: writes fragment on PR branch, assembles on merge to main
-- `direct-commit` - Commits changelog directly to main with `[skip ci]`
-- `pull-request` - Creates a separate PR for changelog updates
-- `update-branch` - Commits changelog to the PR branch before merge
+The workflow (`.github/workflows/changelog.yml`) is a **reusable workflow** called from other repositories. It fires on push to main, extracts the merged PR number from the commit message, generates a changelog entry, and commits to CHANGELOG.md with `[skip ci]`.

@@ -1,7 +1,6 @@
 name: Generate Changelog
 
 on:
-  workflow_dispatch:
   workflow_call:
     inputs:
       python-version:
@@ -24,16 +23,6 @@ on:
         required: false
         type: string
         default: ''
-      mode:
-        description: 'How to commit changelog: fragment (recommended), direct-commit, pull-request, update-branch'
-        required: false
-        type: string
-        default: 'fragment'
-      pr-number:
-        description: 'PR number (auto-detected for fragment mode, required for update-branch mode)'
-        required: false
-        type: string
-        default: ''
     secrets:
       ANTHROPIC_API_KEY:
         description: 'Anthropic API key for AI summaries'
@@ -46,12 +35,11 @@ on:
         required: false
 
 jobs:
-  # Fragment mode: generate a fragment file on the PR branch
-  generate-fragment:
-    if: >-
-      (inputs.mode == 'fragment' || inputs.mode == '') &&
-      (github.event_name == 'pull_request' || (github.event_name == 'workflow_call' && inputs.pr-number != ''))
+  changelog:
     runs-on: ubuntu-latest
+    concurrency:
+      group: changelog-update
+      cancel-in-progress: false
 
     permissions:
       contents: write
@@ -61,10 +49,32 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.head_ref || '' }}
+          ref: ${{ github.ref }}
+          fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Extract PR number from merge commit
+        id: pr
+        run: |
+          SUBJECT=$(git log -1 --format='%s')
+          echo "Commit subject: $SUBJECT"
+          # Try merge commit format: "Merge pull request #N from ..."
+          PR_NUM=$(echo "$SUBJECT" | grep -oE 'Merge pull request #[0-9]+' | grep -oE '[0-9]+')
+          # Fall back to squash merge format: trailing "(#N)"
+          if [ -z "$PR_NUM" ]; then
+            PR_NUM=$(echo "$SUBJECT" | grep -oE '\(#[0-9]+\)$' | grep -oE '[0-9]+')
+          fi
+          if [ -z "$PR_NUM" ]; then
+            echo "No PR number found in commit message, skipping."
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "Found PR #$PR_NUM"
+            echo "number=$PR_NUM" >> $GITHUB_OUTPUT
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Checkout changelog_generator
+        if: steps.pr.outputs.skip != 'true'
         uses: actions/checkout@v4
         with:
           repository: jmackown/changelog_generator
@@ -73,20 +83,17 @@ jobs:
             changelog/run.py
 
       - name: Set up Python
+        if: steps.pr.outputs.skip != 'true'
         uses: actions/setup-python@v5
         with:
           python-version: ${{ inputs.python-version || '3.11' }}
 
       - name: Install dependencies
+        if: steps.pr.outputs.skip != 'true'
         run: pip install requests
 
-      - name: Determine PR number
-        id: pr
-        run: |
-          PR_NUM="${{ inputs.pr-number || github.event.pull_request.number }}"
-          echo "number=$PR_NUM" >> $GITHUB_OUTPUT
-
-      - name: Generate fragment
+      - name: Generate changelog entry
+        if: steps.pr.outputs.skip != 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -94,215 +101,25 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python .changelog_generator/changelog/run.py \
-            --fragment \
             --for-pr ${{ steps.pr.outputs.number }} \
             ${{ inputs.with-summaries && '--with-summaries' || '' }} \
             ${{ inputs.provider && format('--provider {0}', inputs.provider) || '' }} \
             ${{ inputs.with-summaries && format('--model {0}', inputs.model || 'claude-3-5-haiku-20241022') || '' }}
 
       - name: Cleanup
+        if: steps.pr.outputs.skip != 'true'
         run: rm -rf .changelog_generator
 
-      - name: Commit fragment
+      - name: Commit changelog
+        if: steps.pr.outputs.skip != 'true'
         run: |
           git config user.name "changelog-bot"
           git config user.email "changelog-bot@users.noreply.github.com"
-          git add .changelog/
+          git pull --rebase origin main
+          git add CHANGELOG.md
           if git diff --cached --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "docs: add changelog fragment for PR #${{ steps.pr.outputs.number }}"
+            git commit -m "docs: update changelog for PR #${{ steps.pr.outputs.number }} [skip ci]"
             git push
           fi
-
-  # Fragment mode: assemble fragments on merge to main
-  assemble-changelog:
-    if: >-
-      (inputs.mode == 'fragment' || inputs.mode == '') &&
-      github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    concurrency:
-      group: changelog-assemble
-      cancel-in-progress: false
-
-    permissions:
-      contents: write
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Checkout changelog_generator
-        uses: actions/checkout@v4
-        with:
-          repository: jmackown/changelog_generator
-          path: .changelog_generator
-          sparse-checkout: |
-            changelog/run.py
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ inputs.python-version || '3.11' }}
-
-      - name: Install dependencies
-        run: pip install requests
-
-      - name: Assemble changelog
-        run: python .changelog_generator/changelog/run.py --assemble
-
-      - name: Cleanup
-        run: rm -rf .changelog_generator
-
-      - name: Commit assembled changelog
-        run: |
-          git config user.name "changelog-bot"
-          git config user.email "changelog-bot@users.noreply.github.com"
-          git add CHANGELOG.md .changelog/
-          if git diff --cached --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "docs: update changelog [skip ci]"
-            git push
-          fi
-
-  # Legacy modes (direct-commit, pull-request, update-branch)
-  changelog-legacy:
-    # Skip if commit message contains [skip ci] or [changelog skip]
-    if: >-
-      inputs.mode != 'fragment' && inputs.mode != '' &&
-      (github.event_name == 'workflow_call' ||
-       (!contains(github.event.head_commit.message, '[skip ci]') &&
-        !contains(github.event.head_commit.message, '[changelog skip]')))
-    runs-on: ubuntu-latest
-
-    permissions:
-      contents: write
-      pull-requests: write
-      actions: read
-
-    steps:
-      - name: Checkout calling repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-          ref: ${{ inputs.mode == 'update-branch' && format('refs/pull/{0}/head', inputs.pr-number) || '' }}
-
-      - name: Checkout PR branch for update-branch mode
-        if: inputs.mode == 'update-branch' && inputs.pr-number != ''
-        run: |
-          PR_BRANCH=$(gh pr view ${{ inputs.pr-number }} --json headRefName -q '.headRefName')
-          git checkout -B "$PR_BRANCH"
-          git pull origin "$PR_BRANCH" || true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Checkout changelog_generator for changelog script
-        uses: actions/checkout@v4
-        with:
-          repository: jmackown/changelog_generator
-          path: .changelog_generator
-          sparse-checkout: |
-            changelog/run.py
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ inputs.python-version || '3.11' }}
-
-      - name: Install dependencies
-        run: pip install requests
-
-      - name: Generate changelog (update-branch mode)
-        if: inputs.mode == 'update-branch' && inputs.pr-number != ''
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          python .changelog_generator/changelog/run.py \
-            --for-pr ${{ inputs.pr-number }} \
-            ${{ inputs.with-summaries && '--with-summaries' || '' }} \
-            ${{ inputs.provider && format('--provider {0}', inputs.provider) || '' }} \
-            ${{ inputs.with-summaries && format('--model {0}', inputs.model || 'claude-3-5-haiku-20241022') || '' }}
-
-      - name: Generate changelog (direct-commit or pull-request mode)
-        if: inputs.mode != 'update-branch'
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          python .changelog_generator/changelog/run.py \
-            --since-last-commit \
-            ${{ inputs.with-summaries && '--with-summaries' || '' }} \
-            ${{ inputs.provider && format('--provider {0}', inputs.provider) || '' }} \
-            ${{ inputs.with-summaries && format('--model {0}', inputs.model || 'claude-3-5-haiku-20241022') || '' }}
-
-      - name: Cleanup temporary files
-        run: rm -rf .changelog_generator
-
-      - name: Check for changes
-        id: check_changes
-        run: |
-          if [[ -n $(git status --porcelain) ]]; then
-            echo "has_changes=true" >> $GITHUB_OUTPUT
-          else
-            echo "has_changes=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Commit to PR branch (update-branch mode)
-        if: steps.check_changes.outputs.has_changes == 'true' && inputs.mode == 'update-branch' && inputs.pr-number != ''
-        run: |
-          PR_BRANCH=$(gh pr view ${{ inputs.pr-number }} --json headRefName -q '.headRefName')
-          git config user.name "changelog-bot"
-          git config user.email "changelog-bot@users.noreply.github.com"
-          git add CHANGELOG.md
-          git commit -m "docs: add changelog entry for PR #${{ inputs.pr-number }} [skip ci]"
-          git push origin "$PR_BRANCH"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Direct commit to main (direct-commit mode)
-        if: steps.check_changes.outputs.has_changes == 'true' && inputs.mode == 'direct-commit'
-        run: |
-          git config user.name "changelog-bot"
-          git config user.email "changelog-bot@users.noreply.github.com"
-          git add CHANGELOG.md
-          git commit -m "docs: update changelog [skip ci]"
-          git push
-
-      - name: Create Pull Request (pull-request mode)
-        if: steps.check_changes.outputs.has_changes == 'true' && inputs.mode == 'pull-request'
-        uses: peter-evans/create-pull-request@v6
-        with:
-          commit-message: "docs: update changelog [skip ci]"
-          committer: changelog-bot <changelog-bot@users.noreply.github.com>
-          author: changelog-bot <changelog-bot@users.noreply.github.com>
-          title: "chore: update changelog"
-          body: |
-            ## Automated Changelog Update
-
-            This PR updates the changelog with recently merged PRs.
-
-            **Changes:**
-            - Updated `CHANGELOG.md` with latest entries
-
-            **Generated by:** changelog-bot
-            **Triggered by:** Merge to main
-
-            ---
-            *This PR will auto-merge if auto-merge is enabled and all checks pass.*
-          branch: changelog-updates
-          base: main
-          delete-branch: true
-          labels: |
-            automated
-            documentation
-          token: ${{ secrets.GITHUB_TOKEN }}

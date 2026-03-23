@@ -1,10 +1,12 @@
-# Direct commit mode
+# On-merge mode (recommended)
 #
-# On every push to main, generates changelog entries for recently merged PRs
-# and commits directly to main with [skip ci].
+# How it works:
+#   On push to main, extracts the PR number from the merge commit message,
+#   generates a changelog entry with AI summary and GitHub metadata,
+#   and writes it directly to CHANGELOG.md.
 #
-# Simpler than fragment mode but can cause merge conflicts if multiple PRs
-# merge in quick succession.
+# Works with both merge commits and squash merges.
+# Concurrent merges are serialised via concurrency group.
 #
 # Copy this file to .github/workflows/changelog.yml in your repository.
 
@@ -16,11 +18,9 @@ on:
 
 jobs:
   changelog:
-    # Skip if this push was a changelog update (avoid infinite loop)
     if: "!contains(github.event.head_commit.message, '[skip ci]')"
     uses: jmackown/changelog_generator/.github/workflows/changelog.yml@main
     with:
-      mode: direct-commit
       with-summaries: true
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
