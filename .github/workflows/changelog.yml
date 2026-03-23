@@ -59,10 +59,10 @@ jobs:
           SUBJECT=$(git log -1 --format='%s')
           echo "Commit subject: $SUBJECT"
           # Try merge commit format: "Merge pull request #N from ..."
-          PR_NUM=$(echo "$SUBJECT" | grep -oE 'Merge pull request #[0-9]+' | grep -oE '[0-9]+')
+          PR_NUM=$(echo "$SUBJECT" | grep -oE 'Merge pull request #[0-9]+' | grep -oE '[0-9]+' || true)
           # Fall back to squash merge format: trailing "(#N)"
           if [ -z "$PR_NUM" ]; then
-            PR_NUM=$(echo "$SUBJECT" | grep -oE '\(#[0-9]+\)$' | grep -oE '[0-9]+')
+            PR_NUM=$(echo "$SUBJECT" | grep -oE '\(#[0-9]+\)$' | grep -oE '[0-9]+' || true)
           fi
           if [ -z "$PR_NUM" ]; then
             echo "No PR number found in commit message, skipping."
