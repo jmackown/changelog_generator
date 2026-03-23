@@ -1,0 +1,23 @@
+# Pull request mode
+#
+# On every push to main, generates changelog entries and opens a separate PR
+# with the updates. Useful if you want a human to review changelog changes
+# before they land.
+#
+# Copy this file to .github/workflows/changelog.yml in your repository.
+
+name: Changelog
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  changelog:
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    uses: jmackown/changelog_generator/.github/workflows/changelog.yml@main
+    with:
+      mode: pull-request
+      with-summaries: true
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
