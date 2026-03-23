@@ -29,9 +29,9 @@ jobs:
         run: |
           SUBJECT=$(git log -1 --format='%s')
           echo "Commit subject: $SUBJECT"
-          PR_NUM=$(echo "$SUBJECT" | grep -oE 'Merge pull request #[0-9]+' | grep -oE '[0-9]+')
+          PR_NUM=$(echo "$SUBJECT" | grep -oE 'Merge pull request #[0-9]+' | grep -oE '[0-9]+' || true)
           if [ -z "$PR_NUM" ]; then
-            PR_NUM=$(echo "$SUBJECT" | grep -oE '\(#[0-9]+\)$' | grep -oE '[0-9]+')
+            PR_NUM=$(echo "$SUBJECT" | grep -oE '\(#[0-9]+\)$' | grep -oE '[0-9]+' || true)
           fi
           if [ -z "$PR_NUM" ]; then
             echo "No PR number found, skipping."
