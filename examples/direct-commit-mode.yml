@@ -1,0 +1,26 @@
+# Direct commit mode
+#
+# On every push to main, generates changelog entries for recently merged PRs
+# and commits directly to main with [skip ci].
+#
+# Simpler than fragment mode but can cause merge conflicts if multiple PRs
+# merge in quick succession.
+#
+# Copy this file to .github/workflows/changelog.yml in your repository.
+
+name: Changelog
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  changelog:
+    # Skip if this push was a changelog update (avoid infinite loop)
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    uses: jmackown/changelog_generator/.github/workflows/changelog.yml@main
+    with:
+      mode: direct-commit
+      with-summaries: true
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

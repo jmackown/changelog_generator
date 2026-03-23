@@ -1,0 +1,21 @@
+# Fragment mode without AI summaries
+#
+# Same two-phase approach as fragment-mode.yml but without LLM-generated summaries.
+# No API keys required.
+#
+# Copy this file to .github/workflows/changelog.yml in your repository.
+
+name: Changelog
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+  push:
+    branches: [main]
+
+jobs:
+  changelog:
+    uses: jmackown/changelog_generator/.github/workflows/changelog.yml@main
+    with:
+      mode: fragment
+      with-summaries: false

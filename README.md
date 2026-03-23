@@ -4,6 +4,7 @@ Automated changelog generator that extracts PR merge commits from a git reposito
 
 ## Features
 
+- **Fragment-based changelog** (recommended): each PR gets its own changelog fragment file, assembled on merge — no merge conflicts
 - Extracts only PR merge commits from the main branch (excludes direct commits)
 - Enriches entries with GitHub metadata:
   - PR author and approver
@@ -17,31 +18,36 @@ Automated changelog generator that extracts PR merge commits from a git reposito
 
 ## Quick Start: Reusable GitHub Action
 
-The easiest way to use this tool is as a **reusable workflow** - just add one small file to your repository and the changelog generates automatically!
+The easiest way to use this tool is as a **reusable workflow** — just add one small file to your repository and the changelog generates automatically.
 
 ### 1. Add Workflow File
 
 Create `.github/workflows/changelog.yml` in your repository:
 
 ```yaml
-name: Generate Changelog
+name: Changelog
 
 on:
+  pull_request:
+    types: [opened, synchronize]
   push:
-    branches:
-      - main
-  workflow_dispatch:
+    branches: [main]
 
 jobs:
   changelog:
     uses: jmackown/changelog_generator/.github/workflows/changelog.yml@main
+    with:
+      mode: fragment
+      with-summaries: true
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
 Replace `jmackown` with the GitHub username/org where this repo lives.
 
-**That's it!** The changelog will generate automatically when PRs merge to main.
+**That's it!** Each PR gets a changelog fragment, and they're assembled into `CHANGELOG.md` when merged.
+
+> See the [`examples/`](examples/) directory for ready-to-copy workflow files for all modes.
 
 ### 2. Configure Your Repository
 
@@ -72,20 +78,30 @@ Replace `jmackown` with the GitHub username/org where this repo lives.
 
 ### 3. Test It
 
-1. Merge a test PR to main
-2. Go to **Actions** tab and watch the "Generate Changelog" workflow run
-3. Go to **Pull Requests** tab and look for the automated changelog PR
-4. View the updated `CHANGELOG.md` after it merges
+1. Open a PR — the workflow creates a `.changelog/pr-{N}.md` fragment on the branch
+2. Merge the PR — the workflow assembles all fragments into `CHANGELOG.md` on main
+3. Check the **Actions** tab to watch both steps run
 
-You can also manually trigger via Actions > Generate Changelog > Run workflow.
+You can also manually trigger via Actions > Changelog > Run workflow.
 
-### How It Works
+### How It Works (Fragment Mode)
 
-1. After a PR merges to main, the workflow triggers
-2. Fetches the changelog generator script from `changelog_generator`
-3. Generates a changelog from your PR history
-4. Creates a PR with the changelog updates
-5. Auto-merges if you have auto-merge enabled
+Fragment mode is a two-phase approach that eliminates merge conflicts:
+
+**Phase 1 — On PR open/update** (`pull_request` event):
+1. The workflow generates a changelog entry for the PR
+2. Writes it to `.changelog/pr-{N}.md` on the PR branch
+3. Commits and pushes the fragment — it ships with your PR
+
+**Phase 2 — On merge to main** (`push` event):
+1. The workflow reads all `.changelog/pr-*.md` fragments
+2. Merges them into `CHANGELOG.md`, grouped by year
+3. Deletes the consumed fragment files
+4. Commits to main with `[skip ci]`
+
+**Why fragments?** When multiple PRs are open simultaneously, they each only touch their own `.changelog/pr-{N}.md` file, so they never conflict. The assembly step uses GitHub Actions `concurrency` to serialize, so even simultaneous merges are safe.
+
+**Fragment updates:** If you push new commits to your PR branch, the workflow re-runs and overwrites the fragment with updated content (e.g., if the PR title or description changed).
 
 ## Configuration
 
@@ -151,21 +167,24 @@ jobs:
 
 ### Changelog Modes
 
-The workflow supports three modes for committing changelog updates:
+The workflow supports four modes for committing changelog updates:
 
 | Mode | Trigger | Behavior | Best for |
 |------|---------|----------|----------|
+| **`fragment`** (default) | PR open/update + merge to main | Fragment per PR, assembled on merge | Teams, multiple concurrent PRs |
 | `direct-commit` | PR merges to main | Commits changelog directly to main | Personal projects, no branch protection |
 | `pull-request` | PR merges to main | Creates separate PR for changelog | Repos with branch protection |
 | `update-branch` | PR is approved | Adds changelog to the PR branch before merge | Clean history, changelog in PR |
 
-**Mode: direct-commit (default)**
+**Mode: fragment (default, recommended)**
 
-Commits changelog directly to main after a PR merges:
+Two-phase approach — generates a fragment on the PR branch, assembles on merge to main. See [How It Works](#how-it-works-fragment-mode) above for details.
 
 ```yaml
-name: Generate Changelog
+name: Changelog
 on:
+  pull_request:
+    types: [opened, synchronize]
   push:
     branches: [main]
 
@@ -173,7 +192,27 @@ jobs:
   changelog:
     uses: jmackown/changelog_generator/.github/workflows/changelog.yml@main
     with:
-      mode: 'direct-commit'
+      mode: fragment
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+**Mode: direct-commit**
+
+Commits changelog directly to main after a PR merges:
+
+```yaml
+name: Changelog
+on:
+  push:
+    branches: [main]
+
+jobs:
+  changelog:
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    uses: jmackown/changelog_generator/.github/workflows/changelog.yml@main
+    with:
+      mode: direct-commit
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
@@ -183,42 +222,42 @@ jobs:
 Creates a separate PR for changelog updates (required for protected branches):
 
 ```yaml
-name: Generate Changelog
+name: Changelog
 on:
   push:
     branches: [main]
 
 jobs:
   changelog:
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
     uses: jmackown/changelog_generator/.github/workflows/changelog.yml@main
     with:
-      mode: 'pull-request'
+      mode: pull-request
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
 **Mode: update-branch**
 
-Adds changelog entry to the PR branch when approved (cleanest option - changelog is part of the PR):
+Adds changelog entry to the PR branch before merge:
 
 ```yaml
-name: Generate Changelog
+name: Changelog
 on:
-  pull_request_review:
-    types: [submitted]
+  pull_request:
+    types: [opened, synchronize]
 
 jobs:
   changelog:
-    if: github.event.review.state == 'approved'
     uses: jmackown/changelog_generator/.github/workflows/changelog.yml@main
     with:
-      mode: 'update-branch'
+      mode: update-branch
       pr-number: ${{ github.event.pull_request.number }}
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
-**Note:** With `update-branch` mode, there's potential for merge conflicts if multiple PRs touch the changelog simultaneously. This is rare if PRs are merged promptly after approval.
+**Note:** `update-branch` and legacy modes (`direct-commit`, `pull-request`) can cause merge conflicts when multiple PRs touch the changelog simultaneously. Fragment mode avoids this entirely.
 
 **All available options:**
 ```yaml
@@ -230,8 +269,8 @@ jobs:
       with-summaries: true             # AI summaries (default: true)
       model: 'claude-3-5-haiku-20241022'  # LLM model (auto-detected if not set)
       provider: ''                     # LLM provider: anthropic, openai, gemini (auto-detected from API keys)
-      mode: 'direct-commit'            # How to commit: direct-commit, pull-request, update-branch
-      pr-number: ''                    # PR number (required for update-branch mode)
+      mode: 'fragment'                   # How to commit: fragment (default), direct-commit, pull-request, update-branch
+      pr-number: ''                    # PR number (auto-detected for fragment, required for update-branch)
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -354,6 +393,18 @@ python changelog/run.py --recent 50
 python changelog/run.py --since-last-commit
 ```
 
+**Fragment mode (local):**
+```bash
+# Generate a fragment for PR #42 (on the PR branch)
+python changelog/run.py --fragment --for-pr 42
+
+# With AI summary
+python changelog/run.py --fragment --for-pr 42 --with-summaries
+
+# Assemble all fragments into CHANGELOG.md (on main)
+python changelog/run.py --assemble
+```
+
 **With AI summaries:**
 ```bash
 # Generate with summaries (uses tokens)
@@ -392,11 +443,13 @@ The backfill script:
 | Argument | Description | Default |
 |----------|-------------|---------|
 | `--dry-run` | Preview only, don't write files | `false` (writes by default) |
+| `--fragment` | Write a `.changelog/pr-{N}.md` fragment instead of updating `CHANGELOG.md` (requires `--for-pr`) | - |
+| `--assemble` | Merge all `.changelog/pr-*.md` fragments into `CHANGELOG.md` and delete consumed fragments | - |
 | `--from-date YYYY-MM-DD` | Generate from specific date | `2025-01-01` |
 | `--between COMMIT1 COMMIT2` | Generate between two commits | - |
 | `--recent N` | Generate from recent N commits (overrides default date) | - |
 | `--since-last-commit` | Incremental update (for CI/CD) | - |
-| `--for-pr NUMBER` | Generate entry for a specific PR (for update-branch mode) | - |
+| `--for-pr NUMBER` | Generate entry for a specific PR | - |
 | `--with-summaries` | Generate AI summaries | `false` |
 | `--model MODEL` | LLM model to use | Auto-detected from provider |
 | `--provider NAME` | LLM provider (`anthropic`, `openai`, `gemini`) | Auto-detected from API keys |
@@ -440,28 +493,40 @@ Check:
 3. Branch protection rules don't block auto-merge
 4. The PR has the auto-merge label/setting enabled
 
-### Infinite loop of changelog PRs
+### Infinite loop of changelog commits
 
-The workflow includes `[skip ci]` in commit messages to prevent this. The PR approach naturally prevents loops because:
-- The changelog PR merge triggers the workflow
-- But no new PRs have been merged, so no new changelog entries
-- No changes = no new PR created
+The workflow includes `[skip ci]` in commit messages to prevent this. In fragment mode, the assembly commit on main uses `[skip ci]` so it doesn't re-trigger the workflow.
 
 If loops still happen:
 1. Check that your CI respects `[skip ci]` commits
-2. Add more skip patterns in the workflow's `if:` condition
+2. Add `if: "!contains(github.event.head_commit.message, '[skip ci]')"` to your caller workflow
 
-## How It Works
+### Fragment files appearing in PRs
 
-1. **Fetch commits**: Uses `git log --first-parent --grep='(#'` to find only PR merge commits on main
-2. **Enrich metadata**: Calls GitHub CLI (`gh pr list`, `gh run list`) to get author, approver, workflow data
-3. **Extract ticket refs**: Parses commit messages for JIRA/ticket references (any PROJECT-123 pattern)
-4. **Generate summaries** (optional): Sends PR context to Anthropic/OpenAI/Gemini API for bullet-point summaries
-5. **Cache results**: Stores summaries in `.changelog-summaries.json` to avoid re-processing
-6. **Format output**: Generates Markdown with clickable links and blockquote cards
-7. **Write file**: Saves to `CHANGELOG.md` (unless `--dry-run` specified)
-8. **Create PR**: Uses `peter-evans/create-pull-request` to open a PR with the changes
-9. **Auto-merge** (optional): If enabled, PR automatically merges after checks pass
+This is expected in fragment mode. Each PR will have a `.changelog/pr-{N}.md` file committed to its branch. You can add `.changelog/` to your code review ignore patterns if the files are distracting.
+
+To keep your repo tidy, ensure the assembly step runs on merge to main — it deletes consumed fragments after merging them into `CHANGELOG.md`.
+
+## How It Works (Internals)
+
+**Fragment mode** (`--fragment --for-pr N`):
+1. Fetches metadata for the given PR via GitHub CLI (`gh pr list`)
+2. Enriches with author, approver, workflow run data
+3. Extracts JIRA ticket references from commit message
+4. Optionally generates an AI summary
+5. Writes a single `.changelog/pr-{N}.md` file
+
+**Assembly** (`--assemble`):
+1. Reads all `.changelog/pr-*.md` fragment files
+2. Merges entries into `CHANGELOG.md`, grouped by year, newest first
+3. Preserves any existing manually-written content in `CHANGELOG.md`
+4. Deletes consumed fragment files
+
+**Legacy/direct modes** (`--since-last-commit`, `--recent N`, etc.):
+1. Fetches PR merge commits from main using `git log --first-parent --grep='(#'`
+2. Enriches each entry with GitHub CLI metadata
+3. Optionally generates AI summaries (cached in `.changelog-summaries.json`)
+4. Writes directly to `CHANGELOG.md`
 
 ## Cost Considerations
 
