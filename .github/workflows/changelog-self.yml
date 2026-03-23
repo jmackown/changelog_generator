@@ -33,10 +33,12 @@ jobs:
       - name: Generate fragment
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           python changelog/run.py \
             --fragment \
-            --for-pr ${{ github.event.pull_request.number }}
+            --for-pr ${{ github.event.pull_request.number }} \
+            --with-summaries
 
       - name: Commit fragment
         run: |
