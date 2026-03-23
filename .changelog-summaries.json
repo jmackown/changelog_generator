@@ -1,0 +1,8 @@
+{
+  "071ce3d5920552e371d38a47325d1a333b12e594": [
+    "Improved changelog automation to handle missing PR numbers in merge commits, addressing issues with incomplete changelog entries.",
+    "Ensured local changelog changes are preserved during rebase pulls, enhancing developer workflow and reducing potential data loss.",
+    "Implemented stashing of changes before rebasing, balancing the need for smooth updates with the risk of losing local modifications.",
+    "Co-authored by Claude Opus, indicating collaboration and shared ownership of the feature enhancement."
+  ]
+}

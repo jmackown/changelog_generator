@@ -2,6 +2,15 @@
 
 ## 2026
 
+> ### 📅 2026-03-23 | Feat/on merge changelog ([#7](https://github.com/jmackown/changelog_generator/pull/7))
+> **Author:** @jmackown  
+>
+> • Improved changelog automation to handle missing PR numbers in merge commits, addressing issues with incomplete changelog entries.  
+> • Ensured local changelog changes are preserved during rebase pulls, enhancing developer workflow and reducing potential data loss.  
+> • Implemented stashing of changes before rebasing, balancing the need for smooth updates with the risk of losing local modifications.  
+> • Co-authored by Claude Opus, indicating collaboration and shared ownership of the feature enhancement.  
+> [071ce3d](https://github.com/jmackown/changelog_generator/commit/071ce3d5920552e371d38a47325d1a333b12e594)
+
 > ### 📅 2026-03-23 | Add fragment workflow, examples, and updated docs ([#3](https://github.com/jmackown/changelog_generator/pull/3))
 > **Author:** @jmackown  
 >
@@ -21,4 +30,4 @@
 > [df230f8](https://github.com/jmackown/changelog_generator/commit/df230f800c6d3acebedb5a2e87e53ff9abb84629)
 
 ---
-*Generated on 2026-03-23 13:25:43*
+*Generated on 2026-03-23 15:11:08*
