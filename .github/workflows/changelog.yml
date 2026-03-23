@@ -17,7 +17,7 @@ on:
         description: 'LLM model to use'
         required: false
         type: string
-        default: 'claude-3-5-haiku-20241022'
+        default: 'claude-haiku-4-5-20251001'
       provider:
         description: 'LLM provider (anthropic, openai, gemini). Auto-detects from API keys if not set.'
         required: false
@@ -104,7 +104,7 @@ jobs:
             --for-pr ${{ steps.pr.outputs.number }} \
             ${{ inputs.with-summaries && '--with-summaries' || '' }} \
             ${{ inputs.provider && format('--provider {0}', inputs.provider) || '' }} \
-            ${{ inputs.with-summaries && format('--model {0}', inputs.model || 'claude-3-5-haiku-20241022') || '' }}
+            ${{ inputs.with-summaries && format('--model {0}', inputs.model || 'claude-haiku-4-5-20251001') || '' }}
 
       - name: Cleanup
         if: steps.pr.outputs.skip != 'true'
