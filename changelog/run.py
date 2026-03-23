@@ -628,9 +628,11 @@ Guidelines:
         elif entry.pr_number:
             title_with_link += f" (#{entry.pr_number})"
 
-        # Add anchor for deep linking by workflow run number
+        # Add anchors for deep linking
         if entry.workflow_run_number:
             lines.append(f'<a id="run-{entry.workflow_run_number}"></a>')
+        if entry.pr_number:
+            lines.append(f'<a id="pr-{entry.pr_number}"></a>')
 
         # Start the blockquote card
         lines.append(f"> ### 📅 {date_str} | {title_with_link}")
